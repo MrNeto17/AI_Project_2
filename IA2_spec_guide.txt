@@ -29,7 +29,7 @@ Neste caso (utilizando o exemplo anterior: VALUEs * 0.85 * 1.20 * MULTIPLICADOR_
 MAIS OPÇÕES DE VISUALIZAÇÃO:
 
 - Produto de Produção (NOTA: o que é um produto de produção? É um produto que é mandado produzir pelo sistema (basicamente, um cozinhável: batatas, hambúrguer de frango, hambúrguer vegetariano, apple pie, etc.) - Ver o gráfico apenas para o Produto de produção selecionado.
-- Mostrar Desvio: Este campo tem como objetivo mostrar o ajuste do algoritmo em relação às vendas reais durante o dia (supondo que o algoritmo se retroalimenta), ou seja, por exemplo, em média a aplicação sugeriu produzir 12, mas como as vendas são melhores ou piores em relação ao gráfico para as previsões anteriores do dia, a aplicação aplica a percentagem de diferenciação das vendas do próprio dia. (Continuando com o exemplo anterior: VALUEs * 0.85 * 1.20 * MULTIPLICADOR_MANUAL * MULTIPLICADOR_PROPRIO_DIA)
+- Mostrar Desvio: Este campo tem como objetivo mostrar o ajuste do algoritmo em relação às vendas reais durante o dia (supondo que o algoritmo se retroalimenta), ou seja, por exemplo, em média a aplicação sugeriu produzir 12, mas como as vendas são melhores ou piores em relação ao gráfico para as previsões anteriores do dia, a aplicação aplica a percentagem de diferenciação das vendas do próprio dia. (Continuando com o exemplo anterior: [VALUEs * 0.85 * 1.20 * MULTIPLICADOR_MANUAL] * MULTIPLICADOR_PROPRIO_DIA)
 
 CALCULO FINAL COM TODAS AS CONSTRAINTS
 

@@ -1,0 +1,49 @@
+Assignment 2
+Requisitos de conclusão
+Pedagogical Goal:
+Develop a basic understanding of the opportunities and challenges of developing a machine learning project in the real world.
+
+
+Scenario:
+Your group has just founded a startup for consulting machine learning projects. You found a potential client and you want to convince them them to hire the company.
+
+
+Project Goal:
+Develop a POC addressing a low-hanging fruit problem:
+
+    - identify and describe the problem
+    - develop a model using artificial data
+    - develop a web app illustrating the application of the model
+
+
+Identification of the Problem:
+Find someone whom you know who participates in a company with potential problem (company, public organization, ONG, …) and who is willing to play the part of the contact person.
+
+
+Programming Language:
+Any programming language and development system can be used, including, at the language level, C++, Java, Python, C#, among others. The choice of language and development environment to be used is the responsibility of the students. However, the use of Python is typically preferred. Students may use any library they find useful for the work (NumPy, SciPy, SKLearn, Matplotlib, among many others).
+
+
+**GOALS/REQUIREMENTS:**
+- Customer: name and short description of the customer; name and role of the contact person.
+- Problem: definition of the problem; short description of the current approach to address it.
+- Available Data: high-level description of the data that would be available (e.g. entities or tables)
+- Solution Overview: description of the solution designed to address the problem probably including other components besides the ML model
+			… such as mobile apps, websites, hardware
+			… and other AI techniques
+			e.g. search
+			IMPORTANT NOTE: you are not expected to develop the whole application. Just the predictive model.
+			
+- Predictive Model: Description of the model (i.e. target variable, attributes).
+- Empirical Study (Setup): summary of experimental setup
+				- artificial data generated
+				- model evaluation process
+					*evaluation measures
+					*performances estimation methodology
+					
+- Empirical Study (Results): Algorithms from class.	
+- Stakeholders: list of roles in the organization that need to be involved for the successful development of the project.
+- Expected challenges during development and deployment: technical (e.g. lack of reliable data); organizational (e.g. opposition of users).
+- Unavailable Data: high-level description of additional data that should be available; challenges involved in collecting it.
+- Ethical Risks: what are the ethical risks involved in using the proposed solution.
+
