@@ -1,0 +1,23 @@
+product_id,product_name,description,base_price
+100,Menu Cheese burger,"Cheese burger menu: burger(id:201) plus side(id:3**), drinkside(id:4**) and dessertside(id:5**)",sum of selected options
+101,Menu Double burger,"Double burger menu: burger(id:202) plus side(id:3**), drinkside(id:4**) and dessertside(id:5**)",sum of selected options
+102,Menu Chicken burger,"Chicken burger menu: burger(id:203) plus side(id:3**), drinkside(id:4**) and dessertside(id:5**)",sum of selected options
+103,Menu Fish burger,"Fish burger menu: burger(id:204) plus side(id:3**), drinkside(id:4**) and dessertside(id:5**)",sum of selected options
+104,Menu Veggie burger,"Veggie burger menu: burger(id:205) plus side(id:3**), drinkside(id:4**) and dessertside(id:5**)",sum of selected options
+201,Cheese burger,"Beef patty with cheese, lettuce and house sauce",3.00
+202,Double burger,Two beef patties with cheese and house sauce,4.20
+203,Chicken burger,Crispy chicken fillet with lettuce and mayo,3.55
+204,Fish burger,Breaded fish fillet with tartar sauce,3.75
+205,Veggie burger,Vegetable patty with lettuce and tomato,3.40
+301,Fries,Crispy potato fries,1.50
+302,Carrot sticks,Fresh carrot sticks,1.20
+303,Soup,Soup of the day,1.80
+304,Salad,Small green salad,2.00
+401,Coke,Coca-Cola soft drink,2.00
+402,Fanta,Fanta orange soft drink,2.00
+403,Water,Still bottled water,1.20
+404,Orange juice,Fresh orange juice,2.20
+405,Beer,Draft beer,2.50
+501,Sundae,Ice cream sundae,1.00
+502,Apple pie,Warm apple pie,1.40
+503,Ice-cream cone,Soft serve ice-cream cone,1.10

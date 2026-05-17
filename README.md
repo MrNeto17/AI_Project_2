@@ -9,6 +9,6 @@ O objectivo deste projeto é dar ordens de produção com o objectivo dos client
 
 ## FILES GUIDE:
 - IA2_spec_guide.txt -> problem spec
-- hamburger_store_sales...  .xlxs -> artificially generated from a real dataset (just like the project guide asked for)
-- data_attributes.odt & hamburger_store_prod... .csv -> info on the dataset
-- Manual - Produção Rápida.pdf & Produção Rápida.pdf -> similar project documentation 
+- /dataset(.csv)/ -> artificially data for sales, calender(events, weather, etc.), menu, generated from a real dataset (just like the project guide asked for)
+- /dataset_description/ -> info on the dataset
+- /similar_proj_doc/ -> similar project documentation 
