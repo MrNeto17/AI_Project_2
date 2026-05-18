@@ -1,0 +1,253 @@
+import argparse
+import sqlite3
+import sys
+from datetime import datetime, timedelta
+
+from heuristic import pre_calc_heuristic
+from update_db import update_day_prediction_table, update_event_weather_insight_table
+
+DEFAULT_DB_PATH = "database.db"
+
+WEATHER_CHOICES = {
+    "1": "NOT_RAINING",
+    "2": "RAINING",
+}
+
+EVENT_CHOICES = {
+    "1": "NONE",
+    "2": "HOLIDAY",
+    "3": "SMALL_EVENT",
+    "4": "BIG_EVENT",
+}
+
+PRODUCT_PRINT_ORDER = [
+    "BEEF_BURGER",
+    "CHICKEN_BURGER",
+    "FISH_BURGER",
+    "VEGAN_BURGER",
+    "FRIES",
+    "APPLE_PIE",
+]
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse CLI arguments."""
+    parser = argparse.ArgumentParser(
+        description="Run the production prediction simulator pre-shift workflow."
+    )
+    parser.add_argument(
+        "db_path",
+        nargs="?",
+        default=DEFAULT_DB_PATH,
+        help=f"Path to the SQLite database file. Default: {DEFAULT_DB_PATH}",
+    )
+    return parser.parse_args()
+
+
+def get_next_simulation_day(db_path: str) -> tuple[str, str]:
+    """
+    Resolve the next simulation date from the latest Calendar date.
+
+    Calendar dates are stored as DD/MM/YYYY. The query orders by a converted ISO date so the
+    latest date is chronologically correct even when multiple months are present.
+    """
+    try:
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT date
+                FROM Calendar
+                WHERE date IS NOT NULL AND TRIM(date) != ''
+                ORDER BY
+                    CASE
+                        WHEN date LIKE '__/__/____'
+                            THEN substr(date, 7, 4) || '-' || substr(date, 4, 2) || '-' || substr(date, 1, 2)
+                        ELSE date
+                    END DESC
+                LIMIT 1;
+                """
+            ).fetchone()
+    except sqlite3.Error as exc:
+        raise RuntimeError(f"Failed to read latest Calendar date: {exc}") from exc
+
+    if row is None or row[0] is None:
+        raise RuntimeError(
+            "Calendar table is empty; cannot derive next simulation day."
+        )
+
+    try:
+        latest_date = datetime.strptime(str(row[0]), "%d/%m/%Y")
+    except ValueError as exc:
+        raise RuntimeError(
+            f"Latest Calendar date '{row[0]}' is not in expected DD/MM/YYYY format."
+        ) from exc
+
+    next_date = latest_date + timedelta(days=1)
+    return next_date.strftime("%d/%m/%Y"), next_date.strftime("%A")
+
+
+def prompt_menu_choice(title: str, choices: dict[str, str]) -> str:
+    """Prompt until the user selects a valid numbered choice."""
+    while True:
+        print(title)
+        for key, value in choices.items():
+            print(f"  {key} - {value.replace('_', ' ').title()}")
+
+        selected = input("Choice: ").strip()
+        if selected in choices:
+            return choices[selected]
+
+        print("Invalid choice. Please enter one of the listed numbers.\n")
+
+
+def prompt_multiplier() -> float:
+    """Prompt for the manual multiplier, defaulting to 1.0 on empty input."""
+    while True:
+        raw_value = input("Multiplier (press Enter for default 1.0): ").strip()
+        if raw_value == "":
+            return 1.0
+
+        try:
+            return float(raw_value)
+        except ValueError:
+            print(
+                "Invalid multiplier. Please enter a valid number, e.g. 1.0 or 1.25.\n"
+            )
+
+
+def collect_user_inputs() -> tuple[str, str, float]:
+    """Collect weather, event, and manual multiplier, then ask for confirmation."""
+    while True:
+        print("\nChoose simulation conditions:")
+        weather = prompt_menu_choice("Weather:", WEATHER_CHOICES)
+        print()
+        event = prompt_menu_choice("Event:", EVENT_CHOICES)
+        print()
+        mult_manual = prompt_multiplier()
+
+        print("\nSelected configuration:")
+        print(f"  Weather:    {weather}")
+        print(f"  Event:      {event}")
+        print(f"  Multiplier: {mult_manual}")
+
+        while True:
+            confirmation = input("Confirm these values? (y/n): ").strip().lower()
+            if confirmation in {"y", "yes"}:
+                return weather, event, mult_manual
+            if confirmation in {"n", "no"}:
+                print("\nLet's enter the values again.")
+                break
+            print("Please answer 'y' or 'n'.")
+
+
+def extract_start_hour(time_window: str) -> int | None:
+    """Extract the starting hour from a HH:MM_HH:MM time-window string."""
+    try:
+        return int(time_window.split("_", 1)[0].split(":", 1)[0])
+    except (AttributeError, IndexError, TypeError, ValueError):
+        return None
+
+
+def sort_time_window(time_window: str) -> tuple[int, int, str]:
+    """Sort helper for HH:MM_HH:MM strings."""
+    try:
+        start = time_window.split("_", 1)[0]
+        hour, minute = start.split(":", 1)
+        return int(hour), int(minute), time_window
+    except (AttributeError, IndexError, TypeError, ValueError):
+        return 99, 99, str(time_window)
+
+
+def print_production_schedule(predictions: list[dict]) -> None:
+    """Print TOTAL and per-product production schedule sections."""
+    header = f"{'Time Window':<13} - {'Prep Time':<9} - Prediction"
+
+    print("\n[TOTAL]")
+    print(header)
+
+    totals_by_hour = {hour: 0 for hour in range(11, 24)}
+    for row in predictions:
+        hour = extract_start_hour(str(row.get("time_window", "")))
+        if hour in totals_by_hour:
+            totals_by_hour[hour] += int(row.get("nr", 0) or 0)
+
+    for hour in range(11, 24):
+        total_window = f"{hour:02d}:00_{hour:02d}:59"
+        print(f"{total_window:<13} - {'- - -':<9} - {totals_by_hour[hour]}")
+
+    grouped: dict[str, list[dict]] = {}
+    for row in predictions:
+        prod = str(row.get("prod", "")).upper()
+        if prod:
+            grouped.setdefault(prod, []).append(row)
+
+    ordered_products = [prod for prod in PRODUCT_PRINT_ORDER if prod in grouped]
+    extra_products = sorted(prod for prod in grouped if prod not in PRODUCT_PRINT_ORDER)
+
+    for prod in ordered_products + extra_products:
+        print(f"\n[{prod}]")
+        print(header)
+        for row in sorted(
+            grouped[prod],
+            key=lambda item: sort_time_window(str(item.get("time_window", ""))),
+        ):
+            time_window = str(row.get("time_window", ""))
+            prep_hour = str(row.get("prep_hour", ""))
+            nr = int(row.get("nr", 0) or 0)
+            print(f"{time_window:<13} - {prep_hour:<9} - {nr}")
+
+
+def main() -> None:
+    """Run the full production prediction simulator pre-shift workflow."""
+    args = parse_args()
+    db_path = args.db_path
+
+    try:
+        # Step 1: Refresh pre-calculated database tables before generating predictions.
+        print(f"Using database: {db_path}")
+        print("Updating EventWeatherInsight...")
+        update_event_weather_insight_table(db_path)
+        print("EventWeatherInsight updated successfully.")
+
+        print("Updating DayPrediction...")
+        update_day_prediction_table(db_path)
+        print("DayPrediction updated successfully.")
+
+        # Step 2: Resolve the next simulation date from Calendar without inserting it.
+        simulation_date, week_day = get_next_simulation_day(db_path)
+        print(f"\nNext simulation date: {simulation_date}")
+        print(f"Weekday: {week_day}")
+
+        # Step 3: Gather operator inputs.
+        weather, event, mult_manual = collect_user_inputs()
+
+        # Step 4: Run the pre-shift heuristic.
+        print("\nCalculating pre-shift production schedule...")
+        predictions = pre_calc_heuristic(
+            db_path=db_path,
+            date=simulation_date,
+            week_day=week_day,
+            event=event,
+            weather=weather,
+            mult_manual=mult_manual,
+        )
+
+        if not predictions:
+            print(
+                "No predictions were generated. Check that Items and DayPrediction contain data."
+            )
+            return
+
+        # Step 5: Print the formatted production schedule.
+        print_production_schedule(predictions)
+
+    except (RuntimeError, sqlite3.Error, ValueError) as exc:
+        print(f"Fatal error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except KeyboardInterrupt:
+        print("\nInterrupted by user.", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
