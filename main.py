@@ -1,9 +1,11 @@
 import argparse
+import math
 import sqlite3
 import sys
 from datetime import datetime, timedelta
 
 from heuristic import pre_calc_heuristic
+from ml import predict_ml
 from update_db import update_day_prediction_table, update_event_weather_insight_table
 
 DEFAULT_DB_PATH = "database.db"
@@ -18,6 +20,11 @@ EVENT_CHOICES = {
     "2": "HOLIDAY",
     "3": "SMALL_EVENT",
     "4": "BIG_EVENT",
+}
+
+MODEL_CHOICES = {
+    "1": "Heuristic Model (Baseline)",
+    "2": "Machine Learning Model (Experimental)",
 }
 
 PRODUCT_PRINT_ORDER = [
@@ -140,6 +147,36 @@ def collect_user_inputs() -> tuple[str, str, float]:
             print("Please answer 'y' or 'n'.")
 
 
+def prompt_prediction_model() -> str:
+    """Prompt until the user selects the heuristic or ML prediction model."""
+    while True:
+        print("\nChoose prediction model:")
+        for key, value in MODEL_CHOICES.items():
+            print(f"  {key} - {value}")
+
+        selected = input("Choice: ").strip()
+        if selected in MODEL_CHOICES:
+            return selected
+
+        print("Invalid choice. Please enter 1 or 2.")
+
+
+def apply_manual_multiplier(predictions: list[dict], mult_manual: float) -> list[dict]:
+    """Apply the operator multiplier to already formatted prediction rows."""
+    try:
+        multiplier = float(mult_manual)
+    except (TypeError, ValueError):
+        multiplier = 1.0
+
+    adjusted: list[dict] = []
+    for row in predictions:
+        adjusted_row = dict(row)
+        adjusted_row["nr"] = max(0, math.ceil(int(row.get("nr", 0) or 0) * multiplier))
+        adjusted.append(adjusted_row)
+
+    return adjusted
+
+
 def extract_start_hour(time_window: str) -> int | None:
     """Extract the starting hour from a HH:MM_HH:MM time-window string."""
     try:
@@ -218,19 +255,43 @@ def main() -> None:
         print(f"\nNext simulation date: {simulation_date}")
         print(f"Weekday: {week_day}")
 
-        # Step 3: Gather operator inputs.
+        # Step 3: Gather operator inputs and choose the prediction model.
         weather, event, mult_manual = collect_user_inputs()
+        model_choice = prompt_prediction_model()
 
-        # Step 4: Run the pre-shift heuristic.
+        # Step 4: Run the selected pre-shift prediction model.
         print("\nCalculating pre-shift production schedule...")
-        predictions = pre_calc_heuristic(
-            db_path=db_path,
-            date=simulation_date,
-            week_day=week_day,
-            event=event,
-            weather=weather,
-            mult_manual=mult_manual,
-        )
+        if model_choice == "1":
+            predictions = pre_calc_heuristic(
+                db_path=db_path,
+                date=simulation_date,
+                week_day=week_day,
+                event=event,
+                weather=weather,
+                mult_manual=mult_manual,
+            )
+        else:
+            predictions = predict_ml(
+                db_path=db_path,
+                week_day=week_day,
+                event=event,
+                weather=weather,
+            )
+
+            if predictions is None:
+                print(
+                    "⚠️ ML Model performance below baseline. Falling back to Heuristic Model."
+                )
+                predictions = pre_calc_heuristic(
+                    db_path=db_path,
+                    date=simulation_date,
+                    week_day=week_day,
+                    event=event,
+                    weather=weather,
+                    mult_manual=mult_manual,
+                )
+            else:
+                predictions = apply_manual_multiplier(predictions, mult_manual)
 
         if not predictions:
             print(
