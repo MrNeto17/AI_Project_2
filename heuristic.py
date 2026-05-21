@@ -191,7 +191,7 @@ def pre_calc_heuristic(
         )
 
         # Step 4: Round up and guarantee a non-negative production quantity.
-        nr = max(0, math.ceil(raw_calc))
+        nr = max(0, raw_calc)  # nr = max(0, math.trunc(raw_calc))
 
         results.append(
             {

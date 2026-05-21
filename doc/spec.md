@@ -181,7 +181,7 @@ Esta tabela não é para ser atualizada em tempo real durnate os dias, apenas um
   * Vegan Burger: Tempo Produção = 6 min (7 min total com buffer) | Tempo Prateleira = 15 min | Max Capacity = 6.
   * Apple Pie: Tempo Produção = 10 min (11 min total com buffer) | Tempo Prateleira = 30 min | Max Capacity = 5.
 * **Exemplo de Escalonamento e Capacidade Extra (beef Burger)**:
-  * Horário de funcionamento: Cozinha aberta das 10:30h às 23:59h (Público: 11:00h às 23:59h).
+  * Horário de funcionamento: Cozinha aberta das 10:45h às 23:59h (Público: 11:00h às 23:59h).
   * Janela de cálculo: O número previsto deve ser calculado a cada 20 minutes (tempo de prateleira), com a antecedência do tempo de produção total (5 minutos).
   * Fluxo regular:
     * Alerta 10:55h: Cozinhar X1 para estar pronto e disponível das 11:00h às 11:19h.
@@ -203,7 +203,6 @@ Esta tabela não é para ser atualizada em tempo real durnate os dias, apenas um
 * **Foco Exclusivo**: O algoritmo e monitorização aplicam-se apenas a Produtos de Produção (artigos cozinháveis/preparados), identificados como o verdadeiro gargalo (bottleneck) para uma cozinha rápida.
 * **Simplificações Operacionais**:
   * O tempo de montagem final dos pedidos é desprezado.
-  * O tempo entre a submissão do pedido e a entrega ao cliente com ingredientes prontos é de no máximo 3 minutos.
   * O stock de matérias-primas é considerado ilimitado.
 * **Regra Absoluta de Atendimento**: Todos os pedidos registados têm de ser obrigatoriamente atendidos.
 
@@ -275,7 +274,7 @@ Produtos de Produção, vão ser represntados por tuples (string:NOME,Int:TEMPO_
   * Vegan Burger: Tempo Produção = 6 min (7 min total com buffer) | Tempo Prateleira = 15 min | Max Capacity = 6.
   * Apple Pie: Tempo Produção = 10 min (11 min total com buffer) | Tempo Prateleira = 40 min | Max Capacity = 5.
 
-as "Orders" (ou do Predictive Model, ou mandadas fazer diretamente, porque não estão no predictive model) uma class: [string:NOME,string:HORA_EMICAO,string:HORA_RECEBIDO,string:ESTADO], o HORA_RECEBIDO pode ser "" se a ORDER estiver na queue ainda, ESTADO pode ser: "ESPERA" ou "ENTREGUE"
+as "Orders" (ou do Predictive Model, ou mandadas fazer diretamente, porque não estão no predictive model) uma class: [string:NOME, INVOICE_ID: int ,string:HORA_EMICAO,string:HORA_RECEBIDO,string:ESTADO], o HORA_RECEBIDO pode ser "" se a ORDER estiver na queue ainda, ESTADO pode ser: "INATIVO" "ESPERA" ou "ENTREGUE"
 
 os "Items" tambem são representados numa class: [string:NOME,string:HORA_PRONTO,string:HORA_PRAZO,string:HORA_ENTREGUE,string:ESTADO], HORA_ENTEGUE pode ser "" se ainda estiver na prateleira  sem ser atribuido a uma order, ou se for para o lixo, ou se tiver , ESTADO pode ser: "ESPERA","PREPARACAO","PRATELEIRA", "ENTREGUE", "LIXO"
 
@@ -327,7 +326,7 @@ Os valor VALUE, PCT_DIFERECIAÇAO_EVENT, PCT_DIFERECIAÇAO_EVENT são calculados
 Depois em tempo real assim que for hora de lançar cada uma das predictions a tempo do seu TEMPO_PREPARAÇãO para estar pronto na time_window correta, o calculo seguinte vai ser feito: CALCULO = PRE_CALCULO * MULTIPLICADOR_PROPRIO_DIA(ultimo valor calculado - ha um novo a cada time_window,prod)
 
 
-A aplicação vai para a pagina  com a Estrutura de Visualização (7 Colunas da Esquerda para a Direita) e em tempo real (com um relogio a ir das 10:30 ate as 0:00, com 1minuto simulado = 2 segundos)corre o predictive model durante um dia, o Modelo de Simulação De Pedidos Reais corre antes de começar o dia é adicionada a base de dados ja o dia simulado.
+A aplicação vai para a pagina  com a Estrutura de Visualização (7 Colunas da Esquerda para a Direita) e em tempo real (com um relogio a ir das 10:45 ate as 0:00, com 1minuto simulado = 2 segundos)corre o predictive model durante um dia, o Modelo de Simulação De Pedidos Reais corre antes de começar o dia é adicionada a base de dados ja o dia simulado.
 
 Nesse momento o utilizidor é so um espetador e vê a Simulação e o predictive model a correr na Estrutura de Visualização (7 Colunas da Esquerda para a Direita) em tempo real.
 

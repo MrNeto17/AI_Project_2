@@ -1,224 +1,172 @@
-# APRIL SALES OVERVIEW (CALENDAR-CONDITIONED, GENERATION-ORIENTED)
+# MARCH-APRIL SALES OVERVIEW (CALENDAR-CONDITIONED, GENERATION-ORIENTED)
 
 ## 1) Scope and objective
+Characterize observed sales behavior in March-April 2026 as a function of `week_day`, `event` (`NONE`, `SMALL_EVENT`, `BIG_EVENT`, `HOLIDAY`), `weather` (`RAINING`, `NOT_RAINING`), and `hour`.
 
-This document characterizes how sales behavior varies as a function of:
-- `week_day`
-- `event` (`NONE`, `SMALL_EVENT`, `BIG_EVENT`, `HOLIDAY`)
-- `weather` (`RAINING`, `NOT_RAINING`)
-- `hour` (intra-day demand profile)
-
-The goal is to provide technical constraints and statistical priors for a coding agent that must generate realistic monthly sales datasets from a calendar file only.
-
----
+Objective: provide generation-grade technical constraints and statistical priors for synthetic data simulation driven only by calendar attributes, without day-of-month identity rules.
 
 ## 2) Metric definitions (important for correct simulation)
-
-### Revenue definition (deduped menu logic)
-In this dataset, rows with non-empty `parent_id` are child components of a parent item/menu. Their prices are structurally linked to the parent row and must **not** be double-counted for order revenue.
-
-- **Daily revenue** = sum of `price * quantity` over rows where `parent_id` is empty.
-
-### Order-volume definition
-- **Daily orders** = count of distinct `invoice_id` per day.
-
-### Additional diagnostic metrics used in this overview
-- **AOV** = `daily_revenue / daily_orders`
-- **Parent lines per order** = number of parent rows per invoice (proxy for basket breadth at the purchasable-item level)
-
----
+- **Orders**: count of DISTINCT `invoice_id` per day/period.
+- **Deduped Revenue**: sum of `price * quantity` only where `parent_id IS NULL` (or empty). Rows with populated `parent_id` are child components and are excluded from revenue totals.
+- **AOV**: `Deduped Revenue / Total Orders`.
+- **Parent Lines per Order**: count of parent rows per `invoice_id` (basket-breadth proxy).
 
 ## 3) Global baselines
+- Total orders: **8826**
+- Total deduped revenue: **77203.75**
+- Mean daily orders: **144.69**
+- Mean daily revenue: **1265.64**
+- Mean AOV: **8.74**
+- Distributional baseline on `event = NONE` days:
+  - Orders quantiles (p10/p25/p50/p75/p90): **96.40 / 110.00 / 128.00 / 166.00 / 210.00**
+  - Revenue quantiles (p10/p25/p50/p75/p90): **806.56 / 935.60 / 1120.15 / 1535.55 / 1758.34**
 
-- Total orders: **2203**
-- Total deduped revenue: **20671.70**
-- Mean daily orders: **73.43**
-- Mean daily revenue: **689.06**
-- Mean AOV: **9.36**
-
-Distributional baseline on `event = NONE` days:
-- Orders quantiles (p10/p25/p50/p75/p90): **53 / 56.25 / 64 / 81.75 / 99**
-- Revenue quantiles (p10/p25/p50/p75/p90): **487.30 / 516.89 / 570.47 / 797.89 / 961.15**
-
-Interpretation for synthesis:
-- Non-event days exhibit a wide demand envelope; generator logic should include substantial stochastic spread around weekday baselines.
-
----
+Interpretation for synthesis: non-event demand has a broad envelope (high p90 vs p10 spread), so order generation should be overdispersed with strong day-level stochasticity around structural baselines.
 
 ## 4) Weekday effects (dominant structural driver)
-
 | week_day | days | mean orders | mean revenue | mean AOV |
 |---|---:|---:|---:|---:|
-| Monday | 4 | 65.50 | 601.35 | 9.21 |
-| Tuesday | 4 | 60.50 | 543.04 | 8.93 |
-| Wednesday | 5 | 56.20 | 520.21 | 9.27 |
-| Thursday | 5 | 56.60 | 525.77 | 9.32 |
-| Friday | 4 | 79.25 | 764.14 | 9.64 |
-| Saturday | 4 | 111.75 | 1060.88 | 9.51 |
-| Sunday | 4 | 92.75 | 891.05 | 9.66 |
+| Monday | 9 | 124.89 | 1066.34 | 8.49 |
+| Tuesday | 9 | 107.78 | 917.55 | 8.46 |
+| Wednesday | 9 | 109.78 | 964.63 | 8.79 |
+| Thursday | 9 | 116.22 | 1032.00 | 8.93 |
+| Friday | 8 | 152.00 | 1374.98 | 9.01 |
+| Saturday | 8 | 221.25 | 1915.04 | 8.67 |
+| Sunday | 9 | 190.22 | 1673.21 | 8.84 |
 
 Key conclusions:
-1. **Weekend uplift is large and persistent**.
-   - Weekdays (Mon–Fri): mean orders **62.96**, mean revenue **584.73**
-   - Weekend (Sat–Sun): mean orders **102.25**, mean revenue **975.96**
-   - Weekend multipliers vs weekday:
-     - Orders: **~1.62x**
-     - Revenue: **~1.67x**
-2. AOV changes less than volume; primary lift mechanism is **traffic**, not ticket-size inflation.
+- Weekday (Mon-Fri) mean orders/revenue: **121.45 / 1064.19**
+- Weekend (Sat-Sun) mean orders/revenue: **204.82 / 1787.01**
+- Weekend multipliers vs weekday:
+  - Orders: **1.69x**
+  - Revenue: **1.68x**
+- AOV is comparatively stable across weekdays; primary lift is volume (traffic), not ticket-size inflation.
 
 Simulation implication:
-- Build first-order volume from weekday class (weekday/weekend + specific weekday).
-- Apply event/weather modifiers after weekday baseline.
-
----
+Use weekday as the first-order structural driver for daily volume (`lambda_orders`). Apply event and weather adjustments after weekday baseline; keep AOV modulation mild relative to order-count modulation.
 
 ## 5) Event effects (conditioned on sparse observations)
-
 | event | days | mean orders | mean revenue | mean AOV |
 |---|---:|---:|---:|---:|
-| NONE | 26 | 71.62 | 672.39 | 9.37 |
-| SMALL_EVENT | 2 | 62.00 | 555.80 | 8.97 |
-| BIG_EVENT | 1 | 84.00 | 780.70 | 9.29 |
-| HOLIDAY | 1 | 133.00 | 1297.35 | 9.76 |
+| NONE | 53 | 141.51 | 1239.77 | 8.76 |
+| SMALL_EVENT | 5 | 143.20 | 1173.17 | 8.22 |
+| BIG_EVENT | 2 | 172.00 | 1507.10 | 8.78 |
+| HOLIDAY | 1 | 266.00 | 2615.90 | 9.83 |
 
 Reliability note:
-- `BIG_EVENT` and `HOLIDAY` each have one observation, and `SMALL_EVENT` has two observations. Treat these as **high-variance priors**, not hard deterministic truths.
+`SMALL_EVENT` (5 days), `BIG_EVENT` (2 days), and `HOLIDAY` (1 day) are sparse; treat as high-variance priors.
 
-More robust interpretation (event compared against same weekday/weather `NONE` baseline):
-- `SMALL_EVENT`: ~**1.13–1.19x orders**, with mixed revenue impact due to lower/highly variable AOV in one case.
-- `BIG_EVENT`: ~**1.62x orders**, ~**1.50x revenue**, AOV slightly below same-context baseline.
-- `HOLIDAY`: ~**1.55x orders**, ~**1.53x revenue**, AOV near same-context baseline.
+More robust interpretation:
+Relative to matched `NONE` baseline (same `week_day` + same `weather`):
+- `SMALL_EVENT`: orders **1.05x** (range **0.91-1.18x**), revenue **0.94x** (range **0.77-1.20x**), AOV **0.89x**.
+- `BIG_EVENT`: orders **1.47x** (range **1.34-1.61x**), revenue **1.42x**, AOV **0.97x**.
+- `HOLIDAY`: orders **1.27x**, revenue **1.56x**, AOV **1.21x** (single-observation prior).
 
 Simulation implication:
-- Event mainly scales **order volume**, not dramatically changing AOV.
-- Use moderate uplift for `SMALL_EVENT`, strong uplift for `BIG_EVENT`/`HOLIDAY`, with stochastic noise due to sparse calibration data.
-
----
+Model events primarily as demand-volume multipliers with uncertainty bands. Keep `SMALL_EVENT` weak/moderate and noisy; apply stronger uplift for `BIG_EVENT` and `HOLIDAY`, while allowing AOV to remain near baseline unless explicitly sampled upward.
 
 ## 6) Weather effects and interactions
-
 | weather | days | mean orders | mean revenue | mean AOV |
 |---|---:|---:|---:|---:|
-| NOT_RAINING | 25 | 68.32 | 642.54 | 9.36 |
-| RAINING | 5 | 99.00 | 921.66 | 9.33 |
-
-Raw effect appears strongly positive under `RAINING`, but this is confounded by calendar composition (rain mostly on high-traffic weekend contexts in this sample).
+| NOT_RAINING | 46 | 144.74 | 1270.14 | 8.82 |
+| RAINING | 15 | 144.53 | 1251.81 | 8.49 |
 
 Interaction diagnostics:
-- Weekend only:
-  - `NOT_RAINING`: orders **96.75**, revenue **941.89**
-  - `RAINING`: orders **107.75**, revenue **1010.04**
-  - Rain uplift on weekend exists but is modest vs weekend baseline.
-- Weekday only:
-  - Too little rainy weekday coverage for robust standalone coefficient.
+- Weekday split:
+  - `NOT_RAINING`: **124.88 orders**, **1116.67 revenue**, **8.92 AOV** (34 days)
+  - `RAINING`: **109.80 orders**, **885.79 revenue**, **8.07 AOV** (10 days)
+- Weekend split:
+  - `NOT_RAINING`: **201.00 orders**, **1704.99 revenue**, **8.53 AOV** (12 days)
+  - `RAINING`: **214.00 orders**, **1983.86 revenue**, **9.31 AOV** (5 days)
 
 Simulation implication:
-- Do **not** model rain as a universal large multiplier.
-- Apply weather as a secondary modifier with interaction terms (especially weekend × rain).
-
----
+Do not apply a single global rain coefficient. Use interaction terms (`weather x weekend/weekday`): rain is negative on weekdays in this sample, but mildly positive on weekends.
 
 ## 7) Product-type behavior (what is sold)
+Approximate parent-quantity shares (pattern-based from `product_name`):
+- `MENU`: **40.55%**
+- `MAIN`: **28.40%**
+- `DRINK`: **13.30%**
+- `SIDE`: **11.92%**
+- `DESSERT`: **5.83%**
 
-Parent-line category share (approximate):
-- `MENU`: dominant block (~41% on normal days)
-- `MAIN` (standalone burgers): ~28%
-- `DRINK`: ~14%
-- `SIDE`: ~12%
-- `DESSERT`: ~6%
+Event-conditioned shifts (share of parent quantity):
+- `NONE`: MENU **40.75%**, MAIN **28.29%**, DRINK **13.33%**, SIDE **11.94%**, DESSERT **5.69%**
+- `SMALL_EVENT`: MENU **42.41%**, MAIN **25.21%**, DRINK **12.56%**, SIDE **12.23%**, DESSERT **7.59%**
+- `BIG_EVENT`: MENU **34.30%**, MAIN **35.06%**, DRINK **14.18%**, SIDE **11.43%**, DESSERT **5.03%**
+- `HOLIDAY`: MENU **39.07%**, MAIN **30.00%**, DRINK **13.15%**, SIDE **11.30%**, DESSERT **6.48%**
 
-Event-conditioned category shifts:
-- `NONE`: MENU-heavy baseline.
-- `SMALL_EVENT`: slight increase in `DRINK` and `SIDE` mix.
-- `BIG_EVENT`: shift toward standalone `MAIN` relative to MENU (more à-la-carte behavior).
-- `HOLIDAY`: close to baseline MENU-heavy structure with slightly stronger dessert share.
-
-Menu share by weekday (parent lines):
-- Range ~**36% to 43%** depending on weekday.
-- Lower menu share on Monday/Tuesday; higher on Wednesday/Thursday/Sunday.
-
-Weather-conditioned beverage child-line mix:
-- `RAINING` shifts beverage composition toward **Coke** and away from **Beer**.
-- `NOT_RAINING` has relatively higher beer share.
+Weather/day-conditioned shifts:
+- By weather:
+  - `NOT_RAINING`: MENU **39.92%**, MAIN **28.89%**, DRINK **13.54%**, SIDE **11.85%**, DESSERT **5.80%**
+  - `RAINING`: MENU **42.55%**, MAIN **26.83%**, DRINK **12.55%**, SIDE **12.15%**, DESSERT **5.92%**
+- Beverage mix (`DRINK` subset) under rain shows lower beer share:
+  - `NOT_RAINING`: Beer **14.93%** of beverage quantity
+  - `RAINING`: Beer **10.83%** of beverage quantity
 
 Simulation implication:
-- Keep a stable core product-distribution template, then apply small context-conditioned perturbations by event/weather.
-
----
+Use a stable core mix (`MENU`-first, then `MAIN`) with context perturbations: increase standalone `MAIN` in `BIG_EVENT`; slightly increase `MENU` and reduce beer tendency under `RAINING`; keep shifts bounded (small absolute pp changes except sparse-event cases).
 
 ## 8) Intra-day demand curve (hourly)
-
-Order start-hour distribution (share of total orders):
-- **Lunch cluster (12–13h)**: ~**22.15%**
-- **Dinner peak (19–21h)**: ~**48.94%**
-- Strongest single hour: **21h** (~19.02%), then **20h** (~17.66%), then **19h** (~12.26%)
+Hour-level order distribution (share of total orders):
+- 12h: **10.40%**, 13h: **11.26%**
+- 19h: **12.21%**, 20h: **18.31%**, 21h: **19.15%**, 22h: **6.87%**
+- Top single hour: **21h**, then **20h**, then **19h**.
 
 Windowed shares:
-- `dinner_peak` (19–22): **55.92%**
-- `lunch` (12–14): **25.65%**
-- `afternoon` (15–18): **13.07%**
-- `late` (23+): **3.72%**
-- `pre_lunch` (<=11): **1.63%**
+- `pre_lunch` (<=11): **1.25%**
+- `lunch` (12-14): **25.27%**
+- `afternoon` (15-18): **13.80%**
+- `dinner_peak` (19-22): **56.54%**
+- `late` (23+): **3.15%**
 
 Weekday-specific top hours (avg orders/hour/day):
-- Monday: 20h > 19h > 21h
-- Tuesday: 21h > 20h > 13h
-- Wednesday: 21h ≈ 19h > 13h
-- Thursday: 21h > 12h > 13h
-- Friday: 21h > 20h > (13h ≈ 19h)
-- Saturday: 20h > 21h > 19h
-- Sunday: 21h > 20h > 13h
+- Monday: **20h > 21h > 19h**
+- Tuesday: **21h > 20h > 13h**
+- Wednesday: **21h > 20h > 19h**
+- Thursday: **21h > 12h > 13h**
+- Friday: **21h > 20h > 19h**
+- Saturday: **20h > 21h > 19h**
+- Sunday: **20h > 21h > 19h**
 
-Hourly ticket profile:
-- Higher revenue/order at lunch (~11) and dinner (~9.4–9.5) versus shoulder hours (~7.8–8.3).
-- Menu share is highest at lunch (~49%), lower during afternoon/dinner (~36–38%).
+Hourly AOV/menu share profile:
+- Lunch window: AOV **9.70**, MENU share **48.06%**
+- Afternoon window: AOV **7.90**, MENU share **37.96%**
+- Dinner peak: AOV **8.58**, MENU share **37.60%**
+- Pre-lunch/late are low-volume tails.
 
 Simulation implication:
-- Use a bimodal temporal model (lunch + stronger dinner mode).
-- Scale evening intensity up on Friday/Saturday/Sunday and on major-event conditions.
-
----
+Generate orders with a bimodal curve (lunch + dominant dinner), concentrating most mass in 19-22h. Keep higher MENU intensity at lunch and lower AOV in afternoon shoulder hours.
 
 ## 9) Practical generation blueprint for calendar-driven synthetic months
-
-Recommended factorized model for each day `d`:
-
 1. **Daily orders**
-   - Start with weekday baseline: `lambda_orders(week_day)`
-   - Apply event multiplier: `m_event_orders(event)`
-   - Apply weather multiplier with interaction: `m_weather_orders(weather, week_day_or_weekend)`
-   - Sample from overdispersed count distribution (Negative Binomial preferred over Poisson).
+   - Baseline by weekday from observed means.
+   - Apply multiplicative factors:
+     - `m_event_orders`: `SMALL_EVENT ~1.05x` (high variance), `BIG_EVENT ~1.47x`, `HOLIDAY ~1.27x` (very sparse).
+     - `m_weather_orders`: condition on weekend/weekday (weekday rain downshift; weekend rain mild uplift).
+   - Sample with overdispersion (Negative Binomial preferred).
 
-2. **Daily AOV / revenue per order**
-   - Keep tighter range than volume (AOV is much more stable).
-   - Use mild context shifts only; avoid extreme event-driven AOV jumps.
+2. **Daily AOV**
+   - Use tighter distribution than orders (global mean daily AOV **8.74**).
+   - Event/weather effects are secondary; only sparse `HOLIDAY` shows strong uplift and should be treated as uncertain prior.
 
 3. **Hourly allocation**
-   - Allocate daily orders using context-specific hourly proportions:
-     - strong mass at 19–21h
-     - secondary mass at 12–13h
-   - Event/holiday/rain can further concentrate demand at 20–21h.
+   - Allocate daily orders via window shares: `pre_lunch 1.25%`, `lunch 25.27%`, `afternoon 13.80%`, `dinner_peak 56.54%`, `late 3.15%`.
+   - Inside dinner peak, prioritize `20h-21h`.
 
 4. **Basket composition**
-   - Keep MENU as top-level dominant class.
-   - Introduce context perturbations:
-     - `BIG_EVENT`: relatively more standalone mains
-     - rainy contexts: beverage mix tilts to non-alcoholic soft drinks
-   - Preserve realistic lines/order around observed central tendency (~5 lines median).
+   - Parent-category baseline: MENU **40.55%**, MAIN **28.40%**, DRINK **13.30%**, SIDE **11.92%**, DESSERT **5.83%**.
+   - Parent lines/order distribution target: mean **1.63**, median **1**, p75 **2**, p90 **3**.
+   - Apply contextual perturbations (not full remixes), notably `BIG_EVENT -> MAIN up / MENU down` and `RAINING -> beer share down`.
 
-5. **Parent-child consistency constraints**
-   - If a parent menu is generated, child lines should be generated coherently.
-   - Revenue computation must still rely on parent-row dedup logic to avoid double counting.
-
----
+5. **Parent-child consistency**
+   - Generate parent lines first; attach child component lines consistently to preserve structure.
+   - KPI computation must keep deduped logic: revenue from parent rows only.
 
 ## 10) Hard constraints for downstream coding agent
-
-1. Never infer behavior from explicit day-of-month identities; use only `week_day`, `event`, `weather`, `hour`.
-2. Preserve two-peak intraday shape (lunch + dinner, dinner dominant).
-3. Preserve weekend traffic uplift as the strongest recurring pattern.
-4. Treat event/weather coefficients as probabilistic (sparse-event uncertainty).
-5. Keep AOV variability lower than order-volume variability.
-6. Enforce parent-child pricing consistency in both generation and KPI calculations.
-
-This set of constraints reproduces the observed April dynamics while remaining portable to arbitrary future months driven only by calendar attributes.
+1. Use only `week_day`, `event`, `weather`, and `hour` as behavioral drivers; never encode day-of-month identities.
+2. Compute **Orders** as distinct `invoice_id` counts and **Deduped Revenue** only from parent rows (`parent_id IS NULL/empty`).
+3. Preserve strong weekend uplift (~**1.69x** orders, ~**1.68x** revenue vs weekdays).
+4. Preserve dominant intra-day structure: lunch secondary peak + dinner primary peak (19-22h majority mass).
+5. Treat sparse event classes (`SMALL_EVENT`, `BIG_EVENT`, `HOLIDAY`) as high-variance priors with matched-baseline multipliers, not deterministic constants.
+6. Keep AOV variability lower than order-count variability and enforce parent-child line coherence in generation and downstream metric calculations.

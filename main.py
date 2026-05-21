@@ -4,8 +4,11 @@ import sqlite3
 import sys
 from datetime import datetime, timedelta
 
+from day_sim import day_simulation
 from heuristic import pre_calc_heuristic
 from ml import predict_ml
+from sim_data import format_item_orders_to_queue
+from simulator import generate_day
 from update_db import update_day_prediction_table, update_event_weather_insight_table
 
 DEFAULT_DB_PATH = "database.db"
@@ -171,7 +174,7 @@ def apply_manual_multiplier(predictions: list[dict], mult_manual: float) -> list
     adjusted: list[dict] = []
     for row in predictions:
         adjusted_row = dict(row)
-        adjusted_row["nr"] = max(0, math.ceil(int(row.get("nr", 0) or 0) * multiplier))
+        adjusted_row["nr"] = max(0, math.trunc(int(row.get("nr", 0) or 0) * multiplier))
         adjusted.append(adjusted_row)
 
     return adjusted
@@ -232,6 +235,45 @@ def print_production_schedule(predictions: list[dict]) -> None:
             prep_hour = str(row.get("prep_hour", ""))
             nr = int(row.get("nr", 0) or 0)
             print(f"{time_window:<13} - {prep_hour:<9} - {nr}")
+
+
+def upsert_calendar_entry(
+    db_path: str,
+    sim_date: str,
+    week_day: str,
+    event: str,
+    weather: str,
+) -> None:
+    """Insert/update one Calendar row for the simulated day using uppercase context labels."""
+    normalized_event = str(event or "").strip().upper()
+    normalized_weather = str(weather or "").strip().upper()
+
+    valid_events = {"NONE", "HOLIDAY", "SMALL_EVENT", "BIG_EVENT"}
+    valid_weather = {"NOT_RAINING", "RAINING"}
+
+    if normalized_event not in valid_events:
+        raise ValueError(
+            f"Invalid event '{event}'. Expected one of: {', '.join(sorted(valid_events))}."
+        )
+    if normalized_weather not in valid_weather:
+        raise ValueError(
+            f"Invalid weather '{weather}'. Expected one of: {', '.join(sorted(valid_weather))}."
+        )
+
+    try:
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO Calendar (date, week_day, event, weather)
+                VALUES (?, ?, ?, ?);
+                """,
+                (sim_date, week_day, normalized_event, normalized_weather),
+            )
+            conn.commit()
+    except sqlite3.Error as exc:
+        raise RuntimeError(
+            f"Failed to upsert Calendar entry for {sim_date}: {exc}"
+        ) from exc
 
 
 def main() -> None:
@@ -301,6 +343,47 @@ def main() -> None:
 
         # Step 5: Print the formatted production schedule.
         print_production_schedule(predictions)
+
+        # SIMULATION SECTION
+        proceed = (
+            input("\nDo you want to proceed with the simulation (y/n): ")
+            .strip()
+            .lower()
+        )
+        if proceed not in ("y", "yes"):
+            print("Simulation cancelled. Exiting.")
+            return
+
+        raw_seconds = input(
+            "Time of a simulated minute (default 1.0 seconds): "
+        ).strip()
+        sim_seconds = float(raw_seconds) if raw_seconds else 1.0
+
+        # Generate the simulated sales day before reading ItemOrders for the real-time queue.
+        generate_day(
+            week_day=week_day,
+            event=event,
+            weather=weather,
+            db_path=db_path,
+        )
+
+        # Upsert Calendar right before assigning order_simulation (requested integration point).
+        upsert_calendar_entry(
+            db_path=db_path,
+            sim_date=simulation_date,
+            week_day=week_day,
+            event=event,
+            weather=weather,
+        )
+
+        # Build simulation-order payload from the generated ItemOrders for the same simulation date.
+        order_simulation = format_item_orders_to_queue(
+            db_path=db_path, sim_date=simulation_date
+        )
+        # TEMP TEST PRINT (DELETE AFTER TESTING): shows the full 5-field order_simulation array.
+        # print(order_simulation)
+
+        day_simulation(sim_seconds, predictions, order_simulation, db_path)
 
     except (RuntimeError, sqlite3.Error, ValueError) as exc:
         print(f"Fatal error: {exc}", file=sys.stderr)

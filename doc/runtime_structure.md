@@ -1,3 +1,17 @@
+now in main after printing the day prediction i want it to go to this "Simulate the day (dd/mm/yyyy)" section where it asks the user "Do you want to proceed with the simulation (y/n):" (no will simply exit the programm), and then ask the questions: "Time of a simulated minute (default 1.0 seconds): "
+
+then at teh end of main after calling the order simulation function and the updating the calendar table, make a call for a function that will be called day_simulation(seconds, predictions, order_simulation)
+that will recieve the input of teh user to teh question how many seconds for simulated minute, and the data from predictions in main, and order_simulation in main
+
+this day_simulation function/method will treat both the time and the logic
+ the logic is explain behind, with the arrays behavirou map, and the arrays situation will be evaluted each simulated minute that passes, and the transactions between them will happen, becaus ethey evalute through time most of the time (it basically os is a repeated by the minute evaluation  of the state, and taking action if the rules say so). these logical map is here:
+
+ as for as teh data scructuees "Orders" and Items" are concenred:
+ - "Items" need to be computed from the info on "predictions"
+ - "Orders" are basically each array in the array of arrays "order_simulation"
+ 
+
+
 ###  Array-by-Array Insert/Remove Map
 
 #### 1. `FATURAS` (Global)
@@ -6,22 +20,23 @@
 | 🔹 **INSERT** | `tempo_atual == invoice.HORA_EMISSAO` | Append the full invoice entry to the end of the array. Parser has already distributed production items to `ORDERS_QUEUE`. |
 | 🔸 **REMOVE** | *Never* | Append-only observation array. |
 | 🔄 **UPDATE** | None | Fields remain static after insertion. |
+| 📦 **STRUCTURE** | Runtime retrieval from DB | `[hour, invoice_id, invoice_nr, [[line_nr, parent_id, product_id, product_name, quantity, price], ...], [[item, item_quantity], ...]]`<br>Data grouped by `invoice_id`, pulled live from `Sales` (line items) and `ItemOrders` (bottleneck mapping). |
 
 #### 2. `ORDERS_QUEUE` (x6 Products)
 | Action | Condition | Details |
 |:---|:---|:---|
-| 🔹 **INSERT** | Day initialization (Parser) | All simulated orders for the day are pre-loaded. Initially `ESTADO=""`. |
+| 🔹 **INSERT** | Day initialization (Parser) | All simulated orders for the day are pre-loaded. Structure: `[NOME, INVOICE_ID, HORA_EMISSAO, HORA_RECEBIDO, ESTADO]`. Initially `HORA_RECEBIDO = None/""`, `ESTADO = "INATIVO"`. |
 | 🔹 **ACTIVATE** | `tempo_atual == order.HORA_EMISSAO` | `ESTADO` → `"ESPERA"`. **Increment `nr_real_orders++`** for this product's current time window. |
 | 🔹 **STAY (UNPREDICTED)** | Activated but **NO** matching `SHELF` item in same tick | Order remains in queue (`ESTADO="ESPERA"`). Triggers immediate `Item` creation (see `ITEM_PREP`/`ITEM_QUEUE` rules). |
 | 🔸 **REMOVE** | Order matched with `SHELF` item | Item removed from queue and transferred to `ORDERS_ANSWERED`. |
-| 🔄 **UPDATE** | On match | `HORA_RECEBIDO` → `tempo_atual`, `ESTADO` → `"ENTREGUE"`. |
+| 🔄 **UPDATE** | On match | `HORA_RECEBIDO` → `tempo_atual`, `ESTADO` → `"ENTREGUE"`. `INVOICE_ID` remains constant for traceability. |
 
 #### 3. `ORDERS_ANSWERED` (x6 Products)
 | Action | Condition | Details |
 |:---|:---|:---|
-| 🔹 **INSERT** | Successful match from `ORDERS_QUEUE` | Order moves here immediately after being fulfilled from `SHELF`. |
+| 🔹 **INSERT** | Successful match from `ORDERS_QUEUE` | Order moves here immediately after being fulfilled from `SHELF`. Inherits exact 5-element array structure from queue. |
 | 🔸 **REMOVE** | *Never* | Historical append-only array. |
-| 🔄 **UPDATE** | On insertion | `HORA_RECEBIDO` and `ESTADO` finalized. **If `HORA_EMISSAO == HORA_RECEBIDO` (same tick), increment `nr_predicted_orders++`**. |
+| 🔄 **UPDATE** | On insertion | `HORA_RECEBIDO` and `ESTADO` finalized. **If `HORA_EMISSAO == HORA_RECEBIDO` (same tick), increment `nr_predicted_orders++`**. `INVOICE_ID` preserved for audit matching. |
 
 #### 4. `ITEM_QUEUE` (x6 Products)
 | Action | Condition | Details |
@@ -58,8 +73,8 @@
 
 | Counter | Trigger Condition | Behavior & DB Flush |
 |:---|:---|:---|
-| **`nr_real_orders`** | `tempo_atual == order.HORA_EMISSAO` (Order activates to `"ESPERA"`) | Increments **+1** per activated order, regardless of shelf availability. Accumulates in memory during the current `time_window`. Flushed to DB as `nr_real_orders` when window closes. |
-| **`nr_predicted_orders`** | `order.HORA_EMISSAO == order.HORA_RECEBIDO` (Activated & fulfilled in same tick) | Increments **+1** only if the order finds a `SHELF` item immediately upon activation. Accumulates in memory. Flushed to DB as `nr_predicted_orders` when window closes. |
+| **`nr_real_orders`**(x6 one for each item) | `tempo_atual == order.HORA_EMISSAO` (Order activates to `"ESPERA"`) | Increments **+1** per activated order, regardless of shelf availability. Accumulates in memory during the current `time_window`. Flushed to DB as `nr_real_orders` when window closes. |
+| **`nr_predicted_orders`** (x6 one for each item) | `order.HORA_EMISSAO == order.HORA_RECEBIDO` (Activated & fulfilled in same tick) | Increments **+1** only if the order finds a `SHELF` item immediately upon activation. Accumulates in memory. Flushed to DB as `nr_predicted_orders` when window closes. |
 | **DB Sync Rule** | `tempo_atual` reaches end of product-specific `time_window` (e.g., `11:20` for Pork Burger) | Current accumulators are written to: `INSERT INTO MULTIPLICADOR_PROPRIO_DIA (time_window, prod, nr_predicted_orders, nr_real_orders) VALUES (...)`. Counters reset to `0` for the next window. |
 
 ---

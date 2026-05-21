@@ -423,7 +423,7 @@ def predict_ml(
 
     results: list[dict] = []
     for row, prediction in zip(prediction_rows.to_dict("records"), raw_predictions):
-        nr = max(0, math.ceil(float(prediction)))
+        nr = max(0, float(prediction))  # nr = max(0, math.trunc(float(prediction)))
         results.append(
             {
                 "prod": str(row["prod"]),

@@ -331,7 +331,7 @@ def update_day_prediction_table(db_path: str) -> None:
                         week_day,
                         time_window,
                         prod,
-                        CEIL(values_avg) AS prediction
+                        values_avg AS prediction
                     FROM predictions;
                     """
                 )
