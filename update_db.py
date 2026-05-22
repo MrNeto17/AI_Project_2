@@ -160,32 +160,32 @@ def update_event_weather_insight_table(db_path: str) -> None:
                         CASE
                             WHEN global_mean IS NULL OR global_mean = 0 THEN 1.0
                             WHEN COALESCE(mean_raining, 0) / global_mean = 0 THEN 1.0
-                            ELSE MAX(MIN(COALESCE(mean_raining, 0) / global_mean, 5.0), 0.5)
+                            ELSE MAX(MIN(COALESCE(mean_raining, 0) / global_mean, 1.5), 0.5)
                         END AS pct_dif_raining,
                         CASE
                             WHEN global_mean IS NULL OR global_mean = 0 THEN 1.0
                             WHEN COALESCE(mean_not_raining, 0) / global_mean = 0 THEN 1.0
-                            ELSE MAX(MIN(COALESCE(mean_not_raining, 0) / global_mean, 5.0), 0.5)
+                            ELSE MAX(MIN(COALESCE(mean_not_raining, 0) / global_mean, 1.5), 0.5)
                         END AS pct_dif_not_raining,
                         CASE
                             WHEN global_mean IS NULL OR global_mean = 0 THEN 1.0
                             WHEN COALESCE(mean_event_none, 0) / global_mean = 0 THEN 1.0
-                            ELSE MAX(MIN(COALESCE(mean_event_none, 0) / global_mean, 5.0), 0.5)
+                            ELSE MAX(MIN(COALESCE(mean_event_none, 0) / global_mean, 1.5), 0.5)
                         END AS pct_dif_event_none,
                         CASE
                             WHEN global_mean IS NULL OR global_mean = 0 THEN 1.0
                             WHEN COALESCE(mean_event_holiday, 0) / global_mean = 0 THEN 1.0
-                            ELSE MAX(MIN(COALESCE(mean_event_holiday, 0) / global_mean, 5.0), 0.5)
+                            ELSE MAX(MIN(COALESCE(mean_event_holiday, 0) / global_mean, 1.5), 0.5)
                         END AS pct_dif_event_holiday,
                         CASE
                             WHEN global_mean IS NULL OR global_mean = 0 THEN 1.0
                             WHEN COALESCE(mean_event_small, 0) / global_mean = 0 THEN 1.0
-                            ELSE MAX(MIN(COALESCE(mean_event_small, 0) / global_mean, 5.0), 0.5)
+                            ELSE MAX(MIN(COALESCE(mean_event_small, 0) / global_mean, 1.5), 0.5)
                         END AS pct_dif_event_small,
                         CASE
                             WHEN global_mean IS NULL OR global_mean = 0 THEN 1.0
                             WHEN COALESCE(mean_event_big, 0) / global_mean = 0 THEN 1.0
-                            ELSE MAX(MIN(COALESCE(mean_event_big, 0) / global_mean, 5.0), 0.5)
+                            ELSE MAX(MIN(COALESCE(mean_event_big, 0) / global_mean, 1.5), 0.5)
                         END AS pct_dif_event_big
                     FROM means;
                     """

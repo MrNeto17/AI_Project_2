@@ -6,6 +6,7 @@ and OrdersInsight counter flushing. It does not calculate prediction multipliers
 
 from __future__ import annotations
 
+import math
 import sqlite3
 import time
 from collections import defaultdict
@@ -336,7 +337,8 @@ def _load_faturas_by_minute(db_path: str, sim_date: str) -> dict[int, list[list[
 
 def _make_item(prod: str, start_time: datetime, config: ItemConfig) -> list[Any]:
     hora_pronto = start_time + timedelta(minutes=config.production_time + 1)
-    hora_prazo = hora_pronto + timedelta(minutes=config.shelf_time)
+    # Inclusive shelf window end: if ready at 17:00 with shelf_time=30, deadline is 17:29.
+    hora_prazo = hora_pronto + timedelta(minutes=config.shelf_time - 1)
     return [prod, hora_pronto, hora_prazo, "", STATE_PREPARACAO]
 
 
@@ -480,6 +482,67 @@ def _match_orders(
     return unmatched_requests
 
 
+def calculate_dynamic_multiplier(
+    db_path: str,
+    sim_date: str,
+    prod: str,
+    min_orders_threshold: int = 20,
+) -> float:
+    """Compute MULTIPLICADOR_PROPRIO_DIA from completed OrdersInsight windows.
+
+    Formula:
+        ratio_i = (nr_real_i + 1) / (nr_predicted_i + 1)
+        weight_i = i ** 1.2   (oldest i=1 ... newest i=N)
+        multiplier = sum(weight_i * ratio_i) / sum(weight_i)
+
+    Returns bounded multiplier in [0.5, 5.0], with 1.0 fallback guards.
+    """
+    try:
+        with sqlite3.connect(db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT nr_predicted_orders, nr_real_orders
+                FROM OrdersInsight
+                WHERE date = ?
+                  AND prod = ?
+                ORDER BY time_window ASC;
+                """,
+                (sim_date, prod),
+            ).fetchall()
+    except sqlite3.Error as exc:
+        raise RuntimeError(
+            f"Failed to calculate dynamic multiplier for {sim_date} {prod}: {exc}"
+        ) from exc
+
+    if not rows:
+        return 1.0
+
+    total_real_orders = sum(int(row[1] or 0) for row in rows)
+    if total_real_orders < int(min_orders_threshold):
+        return 1.0
+
+    weighted_sum = 0.0
+    weight_total = 0.0
+    for idx, row in enumerate(rows, start=1):
+        nr_predicted = int(row[0] or 0)
+        nr_real = int(row[1] or 0)
+
+        ratio = (nr_real + 1.0) / (nr_predicted + 1.0)
+        weight = float(idx) ** 1.5
+
+        weighted_sum += weight * ratio
+        weight_total += weight
+
+    if weight_total <= 0.0:
+        return 1.0
+
+    multiplier = weighted_sum / weight_total
+    if multiplier == 0.0:
+        return 1.0
+
+    return max(0.5, min(1.5, multiplier))
+
+
 def _run_predictive_events(
     current_minute: int,
     tempo_atual: datetime,
@@ -490,12 +553,29 @@ def _run_predictive_events(
     orders_answered: dict[str, list[list[Any]]],
     item_queue: dict[str, list[list[Any]]],
     item_prep: dict[str, list[list[Any]]],
+    db_path: str,
+    sim_date: str,
+    use_dynamic_multiplier: bool = True,
 ) -> None:
+    multiplier_cache: dict[str, float] = {}
+
     for event in predictive_events.get(current_minute, []):
         current_window = _window_by_name(windows_by_prod[event.prod], event.time_window)
+
+        if use_dynamic_multiplier:
+            if event.prod not in multiplier_cache:
+                multiplier_cache[event.prod] = calculate_dynamic_multiplier(
+                    db_path=db_path, sim_date=sim_date, prod=event.prod
+                )
+            dynamic_mult = multiplier_cache[event.prod]
+            adjusted_nr = max(0, math.trunc(event.nr * dynamic_mult))
+        else:
+            # Fallback: simply truncate the float prediction to integer
+            adjusted_nr = max(0, math.trunc(event.nr))
+
         _request_production(
             prod=event.prod,
-            quantity=event.nr,
+            quantity=adjusted_nr,
             tempo_atual=tempo_atual,
             configs=configs,
             orders_queue=orders_queue,
@@ -503,7 +583,7 @@ def _run_predictive_events(
             item_queue=item_queue,
             item_prep=item_prep,
             current_window=current_window,
-            prediction_val=event.nr,
+            prediction_val=adjusted_nr,
         )
 
 
@@ -534,8 +614,9 @@ def _advance_and_promote(
             queued_item[ITEM_HORA_PRONTO] = tempo_atual + timedelta(
                 minutes=config.production_time + 1
             )
+            # Inclusive shelf window end: HORA_PRAZO aligns with time_window end minute.
             queued_item[ITEM_HORA_PRAZO] = queued_item[ITEM_HORA_PRONTO] + timedelta(
-                minutes=config.shelf_time
+                minutes=config.shelf_time - 1
             )
             queued_item[ITEM_HORA_ENTREGUE] = ""
             queued_item[ITEM_ESTADO] = STATE_PREPARACAO
@@ -571,13 +652,53 @@ def _flush_orders_insight(
         ) from exc
 
 
+def _flush_items_insight(
+    db_path: str,
+    sim_date: str,
+    orders_answered: dict[str, list[list[Any]]],
+    trash: dict[str, list[list[Any]]],
+) -> None:
+    """Flush end-of-day waiting-time and trash KPIs into ItemsInsight."""
+    try:
+        with sqlite3.connect(db_path) as conn:
+            for prod in sorted(set(orders_answered) | set(trash)):
+                total_waiting_time = 0.0
+                for order in orders_answered.get(prod, []):
+                    hora_emitida = order[ORDER_HORA_EMISSAO]
+                    hora_recebido = order[ORDER_HORA_RECEBIDO]
+                    if isinstance(hora_emitida, datetime) and isinstance(
+                        hora_recebido, datetime
+                    ):
+                        total_waiting_time += (
+                            hora_recebido - hora_emitida
+                        ).total_seconds() / 60.0
+
+                nr_trash_items = len(trash.get(prod, []))
+
+                conn.execute(
+                    """
+                    INSERT INTO ItemsInsight (date, prod, total_waiting_time, nr_trash_items)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT (date, prod) DO UPDATE SET
+                        total_waiting_time = EXCLUDED.total_waiting_time,
+                        nr_trash_items = EXCLUDED.nr_trash_items;
+                    """,
+                    (sim_date, prod, int(total_waiting_time), nr_trash_items),
+                )
+            conn.commit()
+    except sqlite3.Error as exc:
+        raise RuntimeError(
+            f"Failed to flush ItemsInsight for {sim_date}: {exc}"
+        ) from exc
+
+
 def _flush_window_counters(
     current_minute: int,
     db_path: str,
     sim_date: str,
     windows_by_prod: dict[str, list[WindowInfo]],
-    nr_predicted_orders: dict[str, int],
     nr_real_orders: dict[str, int],
+    predicted_demand_map: dict[str, dict[str, int]],
     force_final: bool = False,
 ) -> None:
     for prod, windows in windows_by_prod.items():
@@ -587,15 +708,20 @@ def _flush_window_counters(
                 should_flush = True
             if not should_flush:
                 continue
+
+            # ✅ FIXED: Use original forecasted demand, NOT instant-match counter
+            nr_predicted = predicted_demand_map[prod].get(window.time_window, 0)
+            nr_real = nr_real_orders[prod]
+
             _flush_orders_insight(
                 db_path=db_path,
                 sim_date=sim_date,
                 window=window,
                 prod=prod,
-                nr_predicted=nr_predicted_orders[prod],
-                nr_real=nr_real_orders[prod],
+                nr_predicted=nr_predicted,
+                nr_real=nr_real,
             )
-            nr_predicted_orders[prod] = 0
+            # Only reset real counter; predicted is static per window
             nr_real_orders[prod] = 0
 
 
@@ -677,12 +803,470 @@ def print_simulation_state(
     print("----------------------------------------")
 
 
+class SimulationEngine:
+    """Stateful minute-by-minute simulation engine suitable for web/API usage."""
+
+    def __init__(
+        self,
+        db_path: str,
+        predictions: list[dict[str, Any]],
+        order_simulation: list[list[Any]],
+        use_dynamic_multiplier: bool = True,
+    ) -> None:
+        self.db_path = db_path
+        self.use_dynamic_multiplier = bool(use_dynamic_multiplier)
+
+        self.sim_date = _infer_sim_date(order_simulation, db_path)
+        self.day_anchor = datetime.strptime(self.sim_date, "%d/%m/%Y")
+        self.configs = _load_item_configs(db_path)
+        self.product_names = set(self.configs)
+        self.windows_by_prod = _build_windows(self.configs)
+
+        self.faturas: list[list[Any]] = []
+        self.orders_queue = _initialize_order_queues(
+            order_simulation, self.product_names
+        )
+        self.orders_answered: dict[str, list[list[Any]]] = {
+            prod: [] for prod in self.product_names
+        }
+        self.item_queue: dict[str, list[list[Any]]] = {
+            prod: [] for prod in self.product_names
+        }
+        self.item_prep: dict[str, list[list[Any]]] = {
+            prod: [] for prod in self.product_names
+        }
+        self.shelf: dict[str, list[list[Any]]] = {
+            prod: [] for prod in self.product_names
+        }
+        self.trash: dict[str, list[list[Any]]] = {
+            prod: [] for prod in self.product_names
+        }
+
+        self.nr_real_orders = {prod: 0 for prod in self.product_names}
+        self.nr_predicted_orders = {prod: 0 for prod in self.product_names}
+        self.faturas_by_minute = _load_faturas_by_minute(db_path, self.sim_date)
+        self.predictive_events = _build_prediction_events(
+            predictions, self.configs, self.windows_by_prod
+        )
+
+        self.predicted_demand_map: dict[str, dict[str, int]] = defaultdict(
+            lambda: defaultdict(int)
+        )
+        for events in self.predictive_events.values():
+            for event in events:
+                self.predicted_demand_map[event.prod][event.time_window] += event.nr
+
+        self.urgent_spawned_orders: set[tuple[str, int, datetime]] = set()
+        self.current_minute = OPEN_MINUTES
+        self.is_complete = False
+
+    @staticmethod
+    def _serialize_dt(value: Any) -> Any:
+        if isinstance(value, datetime):
+            return {"__dt__": value.isoformat()}
+        if isinstance(value, list):
+            return [SimulationEngine._serialize_dt(item) for item in value]
+        if isinstance(value, dict):
+            return {
+                str(key): SimulationEngine._serialize_dt(val)
+                for key, val in value.items()
+            }
+        if isinstance(value, tuple):
+            return [SimulationEngine._serialize_dt(item) for item in value]
+        return value
+
+    @staticmethod
+    def _deserialize_dt(value: Any) -> Any:
+        if isinstance(value, dict) and "__dt__" in value:
+            return datetime.fromisoformat(str(value["__dt__"]))
+        if isinstance(value, list):
+            return [SimulationEngine._deserialize_dt(item) for item in value]
+        if isinstance(value, dict):
+            return {
+                str(key): SimulationEngine._deserialize_dt(val)
+                for key, val in value.items()
+            }
+        return value
+
+    def to_session_dict(self) -> dict[str, Any]:
+        return {
+            "db_path": self.db_path,
+            "sim_date": self.sim_date,
+            "use_dynamic_multiplier": self.use_dynamic_multiplier,
+            "current_minute": self.current_minute,
+            "is_complete": self.is_complete,
+            "faturas": self._serialize_dt(self.faturas),
+            "orders_queue": self._serialize_dt(self.orders_queue),
+            "orders_answered": self._serialize_dt(self.orders_answered),
+            "item_queue": self._serialize_dt(self.item_queue),
+            "item_prep": self._serialize_dt(self.item_prep),
+            "shelf": self._serialize_dt(self.shelf),
+            "trash": self._serialize_dt(self.trash),
+            "nr_real_orders": self.nr_real_orders,
+            "nr_predicted_orders": self.nr_predicted_orders,
+            "predicted_demand_map": self.predicted_demand_map,
+            "urgent_spawned_orders": self._serialize_dt(
+                list(self.urgent_spawned_orders)
+            ),
+        }
+
+    @classmethod
+    def from_session_dict(cls, state: dict[str, Any]) -> "SimulationEngine":
+        obj = cls.__new__(cls)
+        obj.db_path = str(state["db_path"])
+        obj.sim_date = str(state["sim_date"])
+        obj.day_anchor = datetime.strptime(obj.sim_date, "%d/%m/%Y")
+        obj.use_dynamic_multiplier = bool(state.get("use_dynamic_multiplier", True))
+
+        obj.configs = _load_item_configs(obj.db_path)
+        obj.product_names = set(obj.configs)
+        obj.windows_by_prod = _build_windows(obj.configs)
+
+        obj.current_minute = int(state.get("current_minute", OPEN_MINUTES))
+        obj.is_complete = bool(state.get("is_complete", False))
+
+        obj.faturas = cls._deserialize_dt(state.get("faturas", []))
+        obj.orders_queue = cls._deserialize_dt(state.get("orders_queue", {}))
+        obj.orders_answered = cls._deserialize_dt(state.get("orders_answered", {}))
+        obj.item_queue = cls._deserialize_dt(state.get("item_queue", {}))
+        obj.item_prep = cls._deserialize_dt(state.get("item_prep", {}))
+        obj.shelf = cls._deserialize_dt(state.get("shelf", {}))
+        obj.trash = cls._deserialize_dt(state.get("trash", {}))
+
+        obj.nr_real_orders = {
+            str(prod): int(value)
+            for prod, value in dict(state.get("nr_real_orders", {})).items()
+        }
+        obj.nr_predicted_orders = {
+            str(prod): int(value)
+            for prod, value in dict(state.get("nr_predicted_orders", {})).items()
+        }
+
+        raw_predicted_map = dict(state.get("predicted_demand_map", {}))
+        obj.predicted_demand_map = defaultdict(lambda: defaultdict(int))
+        for prod, windows in raw_predicted_map.items():
+            obj.predicted_demand_map[str(prod)] = defaultdict(
+                int, {str(k): int(v) for k, v in dict(windows).items()}
+            )
+
+        raw_urgent = cls._deserialize_dt(state.get("urgent_spawned_orders", []))
+        obj.urgent_spawned_orders = set()
+        for entry in raw_urgent:
+            if (
+                isinstance(entry, list)
+                and len(entry) == 3
+                and isinstance(entry[2], datetime)
+            ):
+                obj.urgent_spawned_orders.add((str(entry[0]), int(entry[1]), entry[2]))
+
+        obj.faturas_by_minute = _load_faturas_by_minute(obj.db_path, obj.sim_date)
+        # Predictive events are reconstructed from static predicted_demand_map.
+        obj.predictive_events = defaultdict(list)
+        for prod, windows in obj.predicted_demand_map.items():
+            for time_window, nr in dict(windows).items():
+                if nr <= 0:
+                    continue
+                window = _window_by_name(obj.windows_by_prod.get(prod, []), time_window)
+                if window is None:
+                    continue
+                prep_minute = window.start_minute - (
+                    obj.configs[prod].production_time + 1
+                )
+                obj.predictive_events[prep_minute].append(
+                    PredictionEvent(prod=prod, time_window=time_window, nr=int(nr))
+                )
+
+        return obj
+
+    def _entry_sort_key(self, entry: Any) -> tuple[int, int]:
+        if isinstance(entry, list):
+            if entry and isinstance(entry[0], str) and ":" in entry[0]:
+                try:
+                    minute = _parse_clock_to_minute(entry[0])
+                    return minute, 0
+                except ValueError:
+                    pass
+            best = -1
+            for value in entry:
+                if isinstance(value, datetime):
+                    best = max(best, _datetime_to_minute(value))
+            if best >= 0:
+                return best, 0
+        return -1, 0
+
+    def _flatten_view(
+        self, data: dict[str, list[list[Any]]], view: str
+    ) -> list[list[Any]]:
+        view_key = str(view or "GERAL").strip().upper()
+        if view_key != "GERAL":
+            return list(data.get(view_key.lower(), []))
+
+        merged: list[list[Any]] = []
+        for prod_entries in data.values():
+            merged.extend(prod_entries)
+        merged.sort(key=self._entry_sort_key, reverse=True)
+        return merged
+
+    def get_dashboard_state(self, view: str = "GERAL") -> dict[str, Any]:
+        clock_dt = _minute_to_datetime(self.day_anchor, self.current_minute)
+
+        queue_visible = {
+            prod: [
+                order
+                for order in self.orders_queue.get(prod, [])
+                if len(order) >= 5 and str(order[ORDER_ESTADO]) != STATE_INATIVO
+            ]
+            for prod in self.orders_queue
+        }
+
+        payload = {
+            "clock": clock_dt.strftime("%H:%M"),
+            "current_minute": self.current_minute,
+            "view": str(view or "GERAL").strip().upper(),
+            "faturas": self._flatten_view({"all": self.faturas}, "all"),
+            "orders_queue": self._flatten_view(queue_visible, view),
+            "orders_answered": self._flatten_view(self.orders_answered, view),
+            "item_queue": self._flatten_view(self.item_queue, view),
+            "item_prep": self._flatten_view(self.item_prep, view),
+            "shelf": self._flatten_view(self.shelf, view),
+            "trash": self._flatten_view(self.trash, view),
+            "is_complete": self.is_complete,
+        }
+
+        for key in (
+            "faturas",
+            "orders_queue",
+            "orders_answered",
+            "item_queue",
+            "item_prep",
+            "shelf",
+            "trash",
+        ):
+            payload[key] = _format_for_print(payload[key])
+
+        return payload
+
+    def tick(self, view: str = "GERAL") -> dict[str, Any]:
+        if self.is_complete:
+            return self.get_dashboard_state(view=view)
+
+        tempo_atual = _minute_to_datetime(self.day_anchor, self.current_minute)
+
+        if self.current_minute == END_MINUTES:
+            _expire_shelf_items(tempo_atual, self.shelf, self.trash, force_all=True)
+            _flush_items_insight(
+                db_path=self.db_path,
+                sim_date=self.sim_date,
+                orders_answered=self.orders_answered,
+                trash=self.trash,
+            )
+            self.is_complete = True
+            return self.get_dashboard_state(view=view)
+
+        _expire_shelf_items(tempo_atual, self.shelf, self.trash)
+        self.faturas.extend(self.faturas_by_minute.get(self.current_minute, []))
+
+        _activate_orders(tempo_atual, self.orders_queue, self.nr_real_orders)
+
+        unmatched_requests = _match_orders(
+            tempo_atual=tempo_atual,
+            orders_queue=self.orders_queue,
+            orders_answered=self.orders_answered,
+            shelf=self.shelf,
+            nr_predicted_orders=self.nr_predicted_orders,
+            urgent_spawned_orders=self.urgent_spawned_orders,
+        )
+
+        current_window_by_prod = {
+            prod: _window_for_minute(self.windows_by_prod[prod], self.current_minute)
+            for prod in self.product_names
+        }
+        for prod, quantity in unmatched_requests.items():
+            _request_production(
+                prod=prod,
+                quantity=quantity,
+                tempo_atual=tempo_atual,
+                configs=self.configs,
+                orders_queue=self.orders_queue,
+                orders_answered=self.orders_answered,
+                item_queue=self.item_queue,
+                item_prep=self.item_prep,
+                current_window=current_window_by_prod.get(prod),
+                prediction_val=0,
+            )
+
+        _run_predictive_events(
+            current_minute=self.current_minute,
+            tempo_atual=tempo_atual,
+            predictive_events=self.predictive_events,
+            configs=self.configs,
+            windows_by_prod=self.windows_by_prod,
+            orders_queue=self.orders_queue,
+            orders_answered=self.orders_answered,
+            item_queue=self.item_queue,
+            item_prep=self.item_prep,
+            db_path=self.db_path,
+            sim_date=self.sim_date,
+            use_dynamic_multiplier=self.use_dynamic_multiplier,
+        )
+
+        _advance_and_promote(
+            tempo_atual, self.configs, self.item_queue, self.item_prep, self.shelf
+        )
+
+        _flush_window_counters(
+            current_minute=self.current_minute,
+            db_path=self.db_path,
+            sim_date=self.sim_date,
+            windows_by_prod=self.windows_by_prod,
+            nr_real_orders=self.nr_real_orders,
+            predicted_demand_map=self.predicted_demand_map,
+        )
+
+        self.current_minute += 1
+        return self.get_dashboard_state(view=view)
+
+
+def print_end_of_day_report(
+    db_path: str,
+    sim_date: str,
+    orders_answered: dict[str, list[list[Any]]],
+) -> None:
+    """Print grouped end-of-day KPIs and OrdersInsight summary tables."""
+    try:
+        with sqlite3.connect(db_path) as conn:
+            items_row = conn.execute(
+                """
+                SELECT COALESCE(SUM(total_waiting_time),0), COALESCE(SUM(nr_trash_items),0)
+                FROM ItemsInsight
+                WHERE date=?;
+                """,
+                (sim_date,),
+            ).fetchone()
+            orders_row = conn.execute(
+                """
+                SELECT COALESCE(SUM(nr_predicted_orders),0), COALESCE(SUM(nr_real_orders),0)
+                FROM OrdersInsight
+                WHERE date=?;
+                """,
+                (sim_date,),
+            ).fetchone()
+            details_rows = conn.execute(
+                """
+                SELECT time_window, prod, nr_predicted_orders, nr_real_orders
+                FROM OrdersInsight
+                WHERE date=?
+                ORDER BY prod, time_window;
+                """,
+                (sim_date,),
+            ).fetchall()
+    except sqlite3.Error as exc:
+        raise RuntimeError(
+            f"Failed to load end-of-day metrics for {sim_date}: {exc}"
+        ) from exc
+
+    total_waiting_time = int((items_row[0] if items_row else 0) or 0)
+    trashed = int((items_row[1] if items_row else 0) or 0)
+    predicted = int((orders_row[0] if orders_row else 0) or 0)
+    real_orders = int((orders_row[1] if orders_row else 0) or 0)
+
+    immediate_orders = 0
+    invoice_ids: set[int] = set()
+    for prod_orders in orders_answered.values():
+        for order in prod_orders:
+            if len(order) <= ORDER_HORA_RECEBIDO:
+                continue
+
+            invoice_id = (
+                order[ORDER_INVOICE_ID] if len(order) > ORDER_INVOICE_ID else None
+            )
+            if isinstance(invoice_id, int):
+                invoice_ids.add(invoice_id)
+
+            hora_emitida = order[ORDER_HORA_EMISSAO]
+            hora_recebido = order[ORDER_HORA_RECEBIDO]
+            if not isinstance(hora_emitida, datetime) or not isinstance(
+                hora_recebido, datetime
+            ):
+                continue
+
+            emit_minute = hora_emitida.replace(second=0, microsecond=0)
+            recv_minute = hora_recebido.replace(second=0, microsecond=0)
+            if emit_minute == recv_minute:
+                immediate_orders += 1
+
+    total_invoices = len(invoice_ids)
+
+    waste_denominator = trashed + real_orders
+    waste_ratio = (trashed / waste_denominator) if waste_denominator > 0 else 0.0
+    immediate_service_ratio = immediate_orders / real_orders if real_orders > 0 else 0.0
+    avg_waiting_time = total_waiting_time / real_orders if real_orders > 0 else 0.0
+
+    print("=== END-OF-DAY METRICS ===")
+    print()
+    print("[INVOICES]")
+    print(f"Total Invoices: {total_invoices}")
+    print()
+    print("[ORDERS INSIGHT]")
+    print(f"Total Trashed Items: {trashed}")
+    print(f"Total Predicted Orders: {predicted}")
+    print(f"Total Real Orders: {real_orders}")
+    print(f"Total Immediate Orders: {immediate_orders}")
+    print()
+    print("[RATIOS]")
+    print(f"Waste Ratio: {waste_ratio:.2%}")
+    print(f"Immediate Service Ratio: {immediate_service_ratio:.2%}")
+    print()
+    print("[TIME INSIGHT]")
+    print(f"Total Waiting Time: {total_waiting_time} min")
+    print(f"Waiting Time Average: {avg_waiting_time:.1f} min/order")
+
+    header = "Time Window   - Predicted Orders - Real Orders"
+    totals_by_hour: dict[int, dict[str, int]] = {
+        hour: {"predicted": 0, "real": 0} for hour in range(11, 24)
+    }
+    by_product: dict[str, list[tuple[str, int, int]]] = defaultdict(list)
+
+    for time_window, prod, nr_predicted_orders, nr_real_orders in details_rows:
+        window_text = str(time_window or "")
+        prod_text = str(prod or "").strip().upper()
+        predicted_val = int(nr_predicted_orders or 0)
+        real_val = int(nr_real_orders or 0)
+
+        if "_" in window_text and ":" in window_text:
+            try:
+                start_hour = int(window_text.split("_", 1)[0].split(":", 1)[0])
+            except (TypeError, ValueError, IndexError):
+                start_hour = None
+            if start_hour in totals_by_hour:
+                totals_by_hour[start_hour]["predicted"] += predicted_val
+                totals_by_hour[start_hour]["real"] += real_val
+
+        by_product[prod_text].append((window_text, predicted_val, real_val))
+
+    print("\n[TOTAL]")
+    print(header)
+    for hour in range(11, 24):
+        time_window = f"{hour:02d}:00_{hour:02d}:59"
+        predicted_val = totals_by_hour[hour]["predicted"]
+        real_val = totals_by_hour[hour]["real"]
+        print(f"{time_window:<13} - {predicted_val:<16} - {real_val:<16}")
+
+    for product in PRODUCT_PRINT_ORDER:
+        print(f"\n[{product}]")
+        print(header)
+        rows = by_product.get(product, [])
+        for time_window, predicted_val, real_val in rows:
+            print(f"{time_window:<13} - {predicted_val:<16} - {real_val:<16}")
+
+
 def day_simulation(
     sim_minute_seconds: float,
     predictions: list[dict],
     order_simulation: list[list],
     db_path: str,
-) -> None:
+    use_dynamic_multiplier: bool = True,
+) -> dict[str, list[list[Any]]]:
     """Run the real-time discrete-event day simulation.
 
     The loop follows the required order every minute:
@@ -708,10 +1292,20 @@ def day_simulation(
     TRASH = {prod: [] for prod in product_names}
 
     nr_real_orders = {prod: 0 for prod in product_names}
+    # Internal KPI only (instant fulfill count). Not used for OrdersInsight DB flush.
     nr_predicted_orders = {prod: 0 for prod in product_names}
 
     faturas_by_minute = _load_faturas_by_minute(db_path, sim_date)
     predictive_events = _build_prediction_events(predictions, configs, windows_by_prod)
+
+    # Map: {prod: {time_window: total_forecasted_nr}}
+    predicted_demand_map: dict[str, dict[str, int]] = defaultdict(
+        lambda: defaultdict(int)
+    )
+    for events in predictive_events.values():
+        for event in events:
+            predicted_demand_map[event.prod][event.time_window] += event.nr
+
     urgent_spawned_orders: set[tuple[str, int, datetime]] = set()
 
     print(f"\nStarting real-time day simulation for {sim_date}...")
@@ -724,6 +1318,12 @@ def day_simulation(
             _expire_shelf_items(tempo_atual, SHELF, TRASH, force_all=True)
             # Product windows close at 23:59 and are flushed on that tick; do not
             # re-flush here or the final window counts would be overwritten by zeros.
+            _flush_items_insight(
+                db_path=db_path,
+                sim_date=sim_date,
+                orders_answered=ORDERS_ANSWERED,
+                trash=TRASH,
+            )
             print_simulation_state(
                 tempo_atual=tempo_atual,
                 faturas=FATURAS,
@@ -751,6 +1351,7 @@ def day_simulation(
             orders_queue=ORDERS_QUEUE,
             orders_answered=ORDERS_ANSWERED,
             shelf=SHELF,
+            # Internal KPI only (not flushed as OrdersInsight.nr_predicted_orders).
             nr_predicted_orders=nr_predicted_orders,
             urgent_spawned_orders=urgent_spawned_orders,
         )
@@ -784,6 +1385,9 @@ def day_simulation(
             orders_answered=ORDERS_ANSWERED,
             item_queue=ITEM_QUEUE,
             item_prep=ITEM_PREP,
+            db_path=db_path,
+            sim_date=sim_date,
+            use_dynamic_multiplier=use_dynamic_multiplier,
         )
 
         # 6. Advance item lifecycle and promote queued items.
@@ -795,8 +1399,8 @@ def day_simulation(
             db_path=db_path,
             sim_date=sim_date,
             windows_by_prod=windows_by_prod,
-            nr_predicted_orders=nr_predicted_orders,
             nr_real_orders=nr_real_orders,
+            predicted_demand_map=predicted_demand_map,
         )
 
         print_simulation_state(
@@ -814,12 +1418,13 @@ def day_simulation(
             time.sleep(sleep_seconds)
         current_minute += 1
 
-    total_answered = sum(len(ORDERS_ANSWERED[prod]) for prod in product_names)
-    total_trash = sum(len(TRASH[prod]) for prod in product_names)
-    print(
-        "Day simulation finished: "
-        f"faturas={len(FATURAS)}, answered_orders={total_answered}, trashed_items={total_trash}."
-    )
+    return ORDERS_ANSWERED
 
 
-__all__ = ["day_simulation", "print_simulation_state"]
+__all__ = [
+    "SimulationEngine",
+    "day_simulation",
+    "print_simulation_state",
+    "print_end_of_day_report",
+    "calculate_dynamic_multiplier",
+]

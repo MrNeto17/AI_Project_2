@@ -1,0 +1,201 @@
+{% extends 'base.html' %}
+{% block title %}Home | Production Simulator{% endblock %}
+
+{% block content %}
+{% if error %}
+<div class="alert alert-danger">{{ error }}</div>
+{% endif %}
+{% for info in info_messages %}
+<div class="alert alert-info">{{ info }}</div>
+{% endfor %}
+
+<section class="card mb-4">
+    <div class="card-header fw-bold">Day Setup</div>
+    <div class="card-body">
+        <p class="mb-1"><strong>Date:</strong> {{ simulation_date }}</p>
+        <p class="mb-3"><strong>Weekday:</strong> {{ week_day }}</p>
+
+        <form method="post" class="row g-3">
+            <input type="hidden" name="action" value="confirm">
+
+            <div class="col-md-3">
+                <label class="form-label">Weather</label>
+                <select name="weather" class="form-select" required>
+                    {% for _, value in weather_choices.items() %}
+                    <option value="{{ value }}" {% if config.weather == value %}selected{% endif %}>{{ value.replace('_', ' ').title() }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="col-md-3">
+                <label class="form-label">Event</label>
+                <select name="event" class="form-select" required>
+                    {% for _, value in event_choices.items() %}
+                    <option value="{{ value }}" {% if config.event == value %}selected{% endif %}>{{ value.replace('_', ' ').title() }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="col-md-3">
+                <label class="form-label">Prediction Model</label>
+                <select name="model_choice" class="form-select" required>
+                    {% for key, label in model_choices.items() %}
+                    <option value="{{ key }}" {% if config.model_choice == key %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="col-md-3">
+                <label class="form-label">Multiplier</label>
+                <input type="number" min="0" step="0.01" class="form-control" name="multiplier" value="{{ config.multiplier | default(1.0, true) }}" required>
+            </div>
+
+            <div class="col-12">
+                <button type="submit" class="btn btn-primary">Confirm</button>
+            </div>
+        </form>
+    </div>
+</section>
+
+{% if has_predictions and schedule %}
+<section class="card mb-4">
+    <div class="card-header fw-bold d-flex justify-content-between align-items-center">
+        <span>Production Prediction</span>
+        <button class="btn btn-outline-primary btn-sm" onclick="openScheduleGraph('ALL_ALGORITHMS')">See Graph for TOTAL (all algorithms)</button>
+    </div>
+    <div class="card-body">
+        {% for product, rows in schedule.items() %}
+        <div class="mb-4">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+                <h6 class="mb-0 product-title">{{ product }}</h6>
+                <button class="btn btn-outline-secondary btn-sm" onclick="openScheduleGraph('{{ product }}')">See Graph</button>
+            </div>
+            <div id="table-{{ loop.index }}" class="table-responsive table-collapsible" aria-expanded="false">
+                <table class="table table-sm table-striped align-middle mb-0">
+                    <thead>
+                    <tr>
+                        <th>Time Window</th>
+                        <th>Preparation Time</th>
+                        <th>Prediction (Qty.)</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    {% for row in rows %}
+                    <tr>
+                        <td>{{ row.time_window }}</td>
+                        <td>{{ row.prep_hour }}</td>
+                        <td>{{ row.nr }}</td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                <div id="table-{{ loop.index }}-overlay" class="table-overlay" aria-hidden="true"></div>
+            </div>
+            <div class="see-more-wrap">
+                <button id="table-{{ loop.index }}-btn" class="see-more-btn" onclick="toggleTable('table-{{ loop.index }}')" aria-expanded="false">See more...</button>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+
+<section class="card mb-4">
+    <div class="card-header fw-bold">Simulation Setup</div>
+    <div class="card-body">
+        <form method="post" class="row g-3">
+            <input type="hidden" name="action" value="proceed">
+            <div class="col-md-4 form-check ms-2">
+                <input class="form-check-input" type="checkbox" name="use_realtime_correction" id="use_realtime_correction" {% if config.use_realtime_correction %}checked{% endif %}>
+                <label class="form-check-label" for="use_realtime_correction">Real-time correctness algorithm</label>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label">Speed (seconds per simulated minute)</label>
+                <input type="number" min="0.1" step="0.1" class="form-control" name="sim_speed" value="{{ config.sim_speed if config.sim_speed is not none else 1.0 }}" required>
+            </div>
+            <div class="col-12">
+                <button type="submit" class="btn btn-success">Proceed</button>
+            </div>
+        </form>
+    </div>
+</section>
+{% endif %}
+
+<div class="modal fade" id="graphModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="graphModalTitle">Schedule Graph</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <canvas id="graphCanvas" height="120"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let scheduleChart = null;
+
+function toggleTable(id) {
+    const container = document.getElementById(id);
+    const btn = document.getElementById(id + '-btn');
+    if (!container || !btn) return;
+    const expanded = container.classList.toggle('expanded');
+    btn.textContent = expanded ? 'Show less' : 'See more...';
+    btn.setAttribute('aria-expanded', expanded);
+    container.setAttribute('aria-expanded', expanded);
+    const overlay = document.getElementById(id + '-overlay');
+    if (overlay) {
+        overlay.style.display = expanded ? 'none' : '';
+        overlay.setAttribute('aria-hidden', expanded ? 'true' : 'false');
+    }
+}
+
+async function openScheduleGraph(product) {
+    const res = await fetch(`/graph/${encodeURIComponent(product)}`);
+    const data = await res.json();
+    if (!res.ok) {
+        alert(data.error || 'Could not load graph data.');
+        return;
+    }
+
+    const ctx = document.getElementById('graphCanvas').getContext('2d');
+    if (scheduleChart) {
+        scheduleChart.destroy();
+    }
+
+    if (data.mode === 'compare') {
+        document.getElementById('graphModalTitle').textContent = 'Total Prediction Comparison (Heuristic vs ML)';
+        scheduleChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: data.time_windows,
+                datasets: [
+                    { label: 'Heuristic', data: data.heuristic, borderColor: '#1f77b4', fill: false },
+                    { label: 'ML', data: data.ml, borderColor: '#ff7f0e', fill: false }
+                ]
+            },
+            options: { responsive: true, maintainAspectRatio: true }
+        });
+    } else {
+        document.getElementById('graphModalTitle').textContent = `Prediction Graph - ${data.product}`;
+        scheduleChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: data.time_windows,
+                datasets: [
+                    { label: 'Prediction', data: data.predictions, borderColor: '#198754', fill: false }
+                ]
+            },
+            options: { responsive: true, maintainAspectRatio: true }
+        });
+    }
+
+    const modal = new bootstrap.Modal(document.getElementById('graphModal'));
+    modal.show();
+}
+</script>
+{% endblock %}

@@ -1,0 +1,132 @@
+{% extends 'base.html' %}
+{% block title %}Metrics | Production Simulator{% endblock %}
+
+{% block content %}
+<section class="card mb-4">
+    <div class="card-header fw-bold">End-of-Day Metrics ({{ simulation_date }})</div>
+    <div class="card-body metrics">
+        <h6>INVOICES</h6>
+        <p><span class="metrics-label">Total Invoices:</span> <span class="metrics-value">{{ summary.total_invoices }}</span></p>
+
+        <h6>ORDERS INSIGHT</h6>
+        <p class="mb-1"><span class="metrics-label">Total Trashed Items:</span> <span class="metrics-value">{{ summary.trashed }}</span></p>
+        <p class="mb-1"><span class="metrics-label">Total Predicted Orders:</span> <span class="metrics-value">{{ summary.predicted }}</span></p>
+        <p class="mb-1"><span class="metrics-label">Total Real Orders:</span> <span class="metrics-value">{{ summary.real_orders }}</span></p>
+        <p><span class="metrics-label">Total Immediate Orders:</span> <span class="metrics-value">{{ summary.immediate_orders }}</span></p>
+
+        <h6>RATIOS</h6>
+        <p class="mb-1"><span class="metrics-label">Waste Ratio:</span> <span class="metrics-value">{{ '%.2f%%'|format(summary.waste_ratio * 100) }}</span></p>
+        <p><span class="metrics-label">Immediate Service Ratio:</span> <span class="metrics-value">{{ '%.2f%%'|format(summary.immediate_service_ratio * 100) }}</span></p>
+
+        <h6>TIME INSIGHT</h6>
+        <p class="mb-1"><span class="metrics-label">Total Waiting Time:</span> <span class="metrics-value">{{ summary.total_waiting_time }} min</span></p>
+        <p><span class="metrics-label">Waiting Time Average:</span> <span class="metrics-value">{{ '%.1f'|format(summary.avg_waiting_time) }} min/order</span></p>
+    </div>
+</section>
+
+{% set table_order = ['TOTAL'] + products %}
+{% for product in table_order %}
+<section class="card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h6 class="mb-0 product-title">{{ product }}</h6>
+        <button class="btn btn-outline-primary btn-sm" onclick="openMetricsGraph('{{ product }}')">See Graph</button>
+    </div>
+    <div class="card-body">
+        <div id="metrics-table-{{ loop.index }}" class="table-responsive table-collapsible" aria-expanded="false">
+            <table class="table table-sm table-striped align-middle mb-0">
+                <thead>
+                <tr>
+                    <th>Time Window</th>
+                    <th>Predicted Orders</th>
+                    <th>Real Orders</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for row in tables[product] %}
+                <tr>
+                    <td>{{ row.time_window }}</td>
+                    <td>{{ row.predicted }}</td>
+                    <td>{{ row.real }}</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+            <div id="metrics-table-{{ loop.index }}-overlay" class="table-overlay" aria-hidden="true"></div>
+        </div>
+        <div class="see-more-wrap">
+            <button id="metrics-table-{{ loop.index }}-btn" class="see-more-btn" onclick="toggleTable('metrics-table-{{ loop.index }}')" aria-expanded="false">See more...</button>
+        </div>
+    </div>
+</section>
+{% endfor %}
+
+<form method="post" action="{{ url_for('next_day') }}">
+    <button type="submit" class="btn btn-success">Next Day (Home Page)</button>
+</form>
+
+<div class="modal fade" id="metricsGraphModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="metricsGraphTitle">Metrics Graph</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <canvas id="metricsGraphCanvas" height="120"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let metricsChart = null;
+
+function toggleTable(id) {
+    const container = document.getElementById(id);
+    const btn = document.getElementById(id + '-btn');
+    if (!container || !btn) return;
+    const expanded = container.classList.toggle('expanded');
+    btn.textContent = expanded ? 'Show less' : 'See more...';
+    btn.setAttribute('aria-expanded', expanded);
+    container.setAttribute('aria-expanded', expanded);
+    const overlay = document.getElementById(id + '-overlay');
+    if (overlay) {
+        overlay.style.display = expanded ? 'none' : '';
+        overlay.setAttribute('aria-hidden', expanded ? 'true' : 'false');
+    }
+}
+
+async function openMetricsGraph(product) {
+    const res = await fetch(`/api/metrics/graph/${encodeURIComponent(product)}`);
+    const data = await res.json();
+    if (!res.ok) {
+        alert(data.error || 'Could not load graph data.');
+        return;
+    }
+
+    document.getElementById('metricsGraphTitle').textContent = `Predicted vs Real - ${data.product}`;
+
+    const ctx = document.getElementById('metricsGraphCanvas').getContext('2d');
+    if (metricsChart) {
+        metricsChart.destroy();
+    }
+
+    metricsChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: data.time_windows,
+            datasets: [
+                { label: 'Predicted', data: data.predicted, borderColor: '#0d6efd', fill: false },
+                { label: 'Real', data: data.real, borderColor: '#dc3545', fill: false }
+            ]
+        },
+        options: { responsive: true, maintainAspectRatio: true }
+    });
+
+    const modal = new bootstrap.Modal(document.getElementById('metricsGraphModal'));
+    modal.show();
+}
+</script>
+{% endblock %}

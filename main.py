@@ -4,7 +4,7 @@ import sqlite3
 import sys
 from datetime import datetime, timedelta
 
-from day_sim import day_simulation
+from day_sim import day_simulation, print_end_of_day_report
 from heuristic import pre_calc_heuristic
 from ml import predict_ml
 from sim_data import format_item_orders_to_queue
@@ -281,49 +281,31 @@ def main() -> None:
     args = parse_args()
     db_path = args.db_path
 
+    print(f"Using database: {db_path}")
+
     try:
-        # Step 1: Refresh pre-calculated database tables before generating predictions.
-        print(f"Using database: {db_path}")
-        print("Updating EventWeatherInsight...")
-        update_event_weather_insight_table(db_path)
-        print("EventWeatherInsight updated successfully.")
+        while True:
+            # Step 1: Refresh pre-calculated database tables before generating predictions.
+            print("Updating EventWeatherInsight...")
+            update_event_weather_insight_table(db_path)
+            print("EventWeatherInsight updated successfully.")
 
-        print("Updating DayPrediction...")
-        update_day_prediction_table(db_path)
-        print("DayPrediction updated successfully.")
+            print("Updating DayPrediction...")
+            update_day_prediction_table(db_path)
+            print("DayPrediction updated successfully.")
 
-        # Step 2: Resolve the next simulation date from Calendar without inserting it.
-        simulation_date, week_day = get_next_simulation_day(db_path)
-        print(f"\nNext simulation date: {simulation_date}")
-        print(f"Weekday: {week_day}")
+            # Step 2: Resolve the next simulation date from Calendar without inserting it.
+            simulation_date, week_day = get_next_simulation_day(db_path)
+            print(f"\nNext simulation date: {simulation_date}")
+            print(f"Weekday: {week_day}")
 
-        # Step 3: Gather operator inputs and choose the prediction model.
-        weather, event, mult_manual = collect_user_inputs()
-        model_choice = prompt_prediction_model()
+            # Step 3: Gather operator inputs and choose the prediction model.
+            weather, event, mult_manual = collect_user_inputs()
+            model_choice = prompt_prediction_model()
 
-        # Step 4: Run the selected pre-shift prediction model.
-        print("\nCalculating pre-shift production schedule...")
-        if model_choice == "1":
-            predictions = pre_calc_heuristic(
-                db_path=db_path,
-                date=simulation_date,
-                week_day=week_day,
-                event=event,
-                weather=weather,
-                mult_manual=mult_manual,
-            )
-        else:
-            predictions = predict_ml(
-                db_path=db_path,
-                week_day=week_day,
-                event=event,
-                weather=weather,
-            )
-
-            if predictions is None:
-                print(
-                    "⚠️ ML Model performance below baseline. Falling back to Heuristic Model."
-                )
+            # Step 4: Run the selected pre-shift prediction model.
+            print("\nCalculating pre-shift production schedule...")
+            if model_choice == "1":
                 predictions = pre_calc_heuristic(
                     db_path=db_path,
                     date=simulation_date,
@@ -333,64 +315,100 @@ def main() -> None:
                     mult_manual=mult_manual,
                 )
             else:
-                predictions = apply_manual_multiplier(predictions, mult_manual)
+                predictions = predict_ml(
+                    db_path=db_path,
+                    week_day=week_day,
+                    event=event,
+                    weather=weather,
+                )
 
-        if not predictions:
-            print(
-                "No predictions were generated. Check that Items and DayPrediction contain data."
+                if predictions is None:
+                    print(
+                        "⚠️ ML Model performance below baseline. Falling back to Heuristic Model."
+                    )
+                    predictions = pre_calc_heuristic(
+                        db_path=db_path,
+                        date=simulation_date,
+                        week_day=week_day,
+                        event=event,
+                        weather=weather,
+                        mult_manual=mult_manual,
+                    )
+                else:
+                    predictions = apply_manual_multiplier(predictions, mult_manual)
+
+            if not predictions:
+                print(
+                    "No predictions were generated. Check that Items and DayPrediction contain data."
+                )
+                break
+
+            # Step 5: Print the formatted production schedule.
+            print_production_schedule(predictions)
+
+            # SIMULATION SECTION
+            proceed = (
+                input("\nDo you want to proceed with the simulation (y/n): ")
+                .strip()
+                .lower()
             )
-            return
+            if proceed not in ("y", "yes"):
+                print("Simulation cancelled. Exiting.")
+                break
 
-        # Step 5: Print the formatted production schedule.
-        print_production_schedule(predictions)
+            # Toggle for real-time correctness algorithm.
+            use_realtime_correction = (
+                input("Do you want a real-time correctness algorithm (y/n): ")
+                .strip()
+                .lower()
+            )
+            enable_multiplier = use_realtime_correction in ("y", "yes")
 
-        # SIMULATION SECTION
-        proceed = (
-            input("\nDo you want to proceed with the simulation (y/n): ")
-            .strip()
-            .lower()
-        )
-        if proceed not in ("y", "yes"):
-            print("Simulation cancelled. Exiting.")
-            return
+            raw_seconds = input(
+                "Time of a simulated minute (default 1.0 seconds): "
+            ).strip()
+            sim_seconds = float(raw_seconds) if raw_seconds else 1.0
 
-        raw_seconds = input(
-            "Time of a simulated minute (default 1.0 seconds): "
-        ).strip()
-        sim_seconds = float(raw_seconds) if raw_seconds else 1.0
+            # Generate the simulated sales day before reading ItemOrders for the real-time queue.
+            generate_day(
+                week_day=week_day,
+                event=event,
+                weather=weather,
+                db_path=db_path,
+            )
 
-        # Generate the simulated sales day before reading ItemOrders for the real-time queue.
-        generate_day(
-            week_day=week_day,
-            event=event,
-            weather=weather,
-            db_path=db_path,
-        )
+            # Upsert Calendar right before assigning order_simulation (requested integration point).
+            upsert_calendar_entry(
+                db_path=db_path,
+                sim_date=simulation_date,
+                week_day=week_day,
+                event=event,
+                weather=weather,
+            )
 
-        # Upsert Calendar right before assigning order_simulation (requested integration point).
-        upsert_calendar_entry(
-            db_path=db_path,
-            sim_date=simulation_date,
-            week_day=week_day,
-            event=event,
-            weather=weather,
-        )
+            # Build simulation-order payload from the generated ItemOrders for the same simulation date.
+            order_simulation = format_item_orders_to_queue(
+                db_path=db_path, sim_date=simulation_date
+            )
 
-        # Build simulation-order payload from the generated ItemOrders for the same simulation date.
-        order_simulation = format_item_orders_to_queue(
-            db_path=db_path, sim_date=simulation_date
-        )
-        # TEMP TEST PRINT (DELETE AFTER TESTING): shows the full 5-field order_simulation array.
-        # print(order_simulation)
+            orders_answered = day_simulation(
+                sim_seconds,
+                predictions,
+                order_simulation,
+                db_path,
+                enable_multiplier,
+            )
+            print_end_of_day_report(db_path, simulation_date, orders_answered)
 
-        day_simulation(sim_seconds, predictions, order_simulation, db_path)
+            restart_choice = input("\nGo to next day (y/n): ").strip().lower()
+            if restart_choice not in ("y", "yes"):
+                print("Simulation ended. Exiting.")
+                break
 
     except (RuntimeError, sqlite3.Error, ValueError) as exc:
         print(f"Fatal error: {exc}", file=sys.stderr)
-        sys.exit(1)
     except KeyboardInterrupt:
         print("\nInterrupted by user.", file=sys.stderr)
-        sys.exit(1)
 
 
 if __name__ == "__main__":
