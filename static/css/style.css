@@ -122,3 +122,17 @@ body {
 .metrics .metrics-value {
     font-weight: 400;
 }
+
+/* Dashboard column background variants */
+.state-column.bg-gray {
+    background: #f3f5f6; /* light gray */
+}
+.state-column.bg-green {
+    background: #e7f7e8; /* light green */
+}
+
+/* Preserve header underline and spacing on colored columns */
+.state-column.bg-gray h6,
+.state-column.bg-green h6 {
+    background: transparent;
+}

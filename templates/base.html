@@ -14,6 +14,7 @@
         <span class="navbar-brand mb-0 h1">Fast-food Kitchen Predictive Model</span>
         <div class="d-flex ms-auto">
             <button class="btn btn-outline-light" type="button" data-bs-toggle="modal" data-bs-target="#menuModal">See Menu</button>
+            <button class="btn btn-outline-light ms-2" type="button" data-bs-toggle="modal" data-bs-target="#itemsModal">Products Info</button>
         </div>
     </div>
 </nav>
@@ -72,6 +73,46 @@
         </div>
     </div>
 </div>
+
+            <!-- Modal: Fixed Items (production config copied from DB) -->
+            <div class="modal fade" id="itemsModal" tabindex="-1" aria-labelledby="itemsModalLabel" aria-hidden="true">
+                <div class="modal-dialog modal-xl modal-dialog-scrollable">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title" id="itemsModalLabel">Production Items</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                        <div class="modal-body">
+                            <div class="table-responsive">
+                                <table class="table table-sm table-striped align-middle mb-0">
+                                    <thead>
+                                    <tr>
+                                        <th>Item Name</th>
+                                        <th>Production Time (min)</th>
+                                        <th>Shelf Time (min)</th>
+                                        <th>Max Capacity</th>
+                                    </tr>
+                                    </thead>
+                                    <tbody>
+                                    <tr><td>beef_burger</td><td>4</td><td>20</td><td>8</td></tr>
+                                    <tr><td>chicken_burger</td><td>4</td><td>20</td><td>8</td></tr>
+                                    <tr><td>fish_burger</td><td>6</td><td>15</td><td>6</td></tr>
+                                    <tr><td>vegan_burger</td><td>6</td><td>15</td><td>6</td></tr>
+                                    <tr><td>fries</td><td>2</td><td>15</td><td>24</td></tr>
+                                    <tr><td>apple_pie</td><td>10</td><td>30</td><td>5</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div class="alert alert-info mt-3 mb-0 small">
+                                For this application we admit a one-minute buffer to account for the time it takes from a request coming into the kitchen to it starting to be in production. So the Production Time in reality is the stated time above plus the one-minute buffer.
+                            </div>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
 
 <main class="container-fluid pb-5">
     {% block content %}{% endblock %}

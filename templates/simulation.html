@@ -5,22 +5,23 @@
 <section class="card mb-3">
     <div class="card-body d-flex flex-wrap justify-content-between gap-3">
         <div>
-            <div><strong>Date:</strong> {{ config.simulation_date }}</div>
-            <div><strong>Weekday:</strong> {{ config.week_day }}</div>
-            <div><strong>Weather:</strong> {{ config.weather }}</div>
-            <div><strong>Event:</strong> {{ config.event }}</div>
-            <div><strong>Model:</strong> {{ 'Heuristic' if config.model_choice == '1' else 'Machine Learning' }}</div>
+            <div>Date: {{ config.simulation_date }}</div>
+            <div>Weekday: {{ config.week_day }}</div>
+            <div>Weather: {{ config.weather }}</div>
+            <div>Event: {{ config.event }}</div>
+            <div>Model: {{ 'Heuristic' if config.model_choice == '1' else 'Machine Learning' }}</div>
         </div>
-        <div class="text-end">
+        <div class="text-end header-controls">
             <h3 class="mb-1">Clock: <span id="clockValue">{{ state.clock }}</span></h3>
-            <small class="text-muted">Auto-tick every {{ (refresh_ms / 1000)|round(2) }} second(s)</small>
+            <button id="pause-btn" class="btn btn-success btn-sm mb-2" onclick="togglePause()">{% if state.paused %}▶{% else %}⏸{% endif %}</button>
+            <small class="text-muted d-block">Auto-tick every {{ (refresh_ms / 1000)|round(2) }} second(s)</small>
         </div>
     </div>
 </section>
 
 <section class="card mb-3">
     <div class="card-body d-flex align-items-center gap-3">
-        <label for="viewSelect" class="mb-0"><strong>View:</strong></label>
+        <label for="viewSelect" class="mb-0">View:</label>
         <select id="viewSelect" class="form-select w-auto">
             {% for option in products %}
             <option value="{{ option }}" {% if state.view == option %}selected{% endif %}>{{ option }}</option>
@@ -31,35 +32,39 @@
 </section>
 
 <section class="dashboard-grid">
-    <div class="state-column">
+    <div class="state-column bg-gray">
         <h6>INVOICES</h6>
         <div id="col-faturas" class="state-list"></div>
     </div>
-    <div class="state-column">
+    <div class="state-column bg-gray">
         <h6>ORDERS QUEUE</h6>
         <div id="col-orders-queue" class="state-list"></div>
     </div>
-    <div class="state-column">
-        <h6>ORDERS ANSWERED</h6>
+    <div class="state-column bg-gray">
+        <h6>ORDERS DISPATCHED</h6>
         <div id="col-orders-answered" class="state-list"></div>
     </div>
-    <div class="state-column">
+    <div class="state-column bg-green">
         <h6>ITEMS PREPARATION QUEUE</h6>
         <div id="col-item-queue" class="state-list"></div>
     </div>
-    <div class="state-column">
+    <div class="state-column bg-green">
         <h6>ITEMS IN PREPARATION</h6>
         <div id="col-item-prep" class="state-list"></div>
     </div>
-    <div class="state-column">
+    <div class="state-column bg-green">
         <h6>ITEMS SHELF</h6>
         <div id="col-shelf" class="state-list"></div>
     </div>
-    <div class="state-column">
+    <div class="state-column bg-green">
         <h6>TRASH</h6>
         <div id="col-trash" class="state-list"></div>
     </div>
 </section>
+
+<div class="alert alert-info mt-3 mb-0 small">
+    Note: Each Invoice (fatura) is decomposed into the individual Production Products it contains, and each one of them is translated into its individual Production Order. So then, a Production Order can match a Production Product coming from the kitchen.
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -68,6 +73,22 @@ window.SIMULATION_CONFIG = {
     refreshMs: {{ refresh_ms }},
     initialState: {{ state|tojson }}
 };
+
+let isPaused = {{ 'true' if state.paused else 'false' }};
+
+async function togglePause() {
+    const btn = document.getElementById('pause-btn');
+    try {
+        const res = await fetch('/api/simulation/toggle-pause', { method: 'POST' });
+        const data = await res.json();
+        isPaused = !!data.paused;
+        // emoji-only label, keep green background (btn-success) consistently
+        btn.textContent = isPaused ? '▶' : '⏸';
+        btn.className = 'btn btn-success btn-sm mb-2';
+    } catch (e) {
+        console.error('Failed to toggle pause:', e);
+    }
+}
 </script>
 <script src="{{ url_for('static', filename='js/simulation.js') }}"></script>
 {% endblock %}

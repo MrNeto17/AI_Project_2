@@ -288,7 +288,7 @@ def home() -> str:
             event = str(request.form.get("event", "")).strip().upper()
             model_choice = str(request.form.get("model_choice", "")).strip()
             multiplier = _safe_float(request.form.get("multiplier"), 1.0)
-            sim_speed = _safe_float(request.form.get("sim_speed"), 1.0)
+            sim_speed = _safe_float(request.form.get("sim_speed"), 0.5)
             if sim_speed <= 0:
                 sim_speed = 1.0
 
@@ -399,7 +399,7 @@ def home() -> str:
                 use_realtime_correction = bool(
                     request.form.get("use_realtime_correction")
                 )
-                sim_speed = _safe_float(request.form.get("sim_speed"), 1.0)
+                sim_speed = _safe_float(request.form.get("sim_speed"), 0.5)
                 if sim_speed <= 0:
                     sim_speed = 1.0
 
@@ -439,7 +439,10 @@ def home() -> str:
                         order_simulation=order_simulation,
                         use_dynamic_multiplier=use_realtime_correction,
                     )
-                    _SIMULATION_DATA[client_id] = engine.to_session_dict()
+                    _SIMULATION_DATA[client_id] = {
+                        **engine.to_session_dict(),
+                        "paused": False,
+                    }
                     return redirect(url_for("simulation_page"))
                 except (RuntimeError, sqlite3.Error, ValueError) as exc:
                     errors.append(f"Failed to initialize simulation: {exc}")
@@ -504,10 +507,15 @@ def simulation_page() -> str:
 
     engine = SimulationEngine.from_session_dict(state)
     view = str(request.args.get("view", "GERAL")).strip().upper()
+    paused = bool(state.get("paused", False))
     dashboard_state = engine.get_dashboard_state(view=view)
-    _SIMULATION_DATA[client_id] = engine.to_session_dict()
+    dashboard_state["paused"] = paused
+    _SIMULATION_DATA[client_id] = {
+        **engine.to_session_dict(),
+        "paused": paused,
+    }
 
-    refresh_ms = max(100, int(_safe_float(config.get("sim_speed"), 1.0) * 1000))
+    refresh_ms = max(100, int(_safe_float(config.get("sim_speed"), 0.5) * 1000))
 
     return render_template(
         "simulation.html",
@@ -526,9 +534,14 @@ def simulation_state_api():
         return jsonify({"error": "Simulation not initialized."}), 400
 
     view = str(request.args.get("view", "GERAL")).strip().upper()
+    paused = bool(state.get("paused", False))
     engine = SimulationEngine.from_session_dict(state)
     dashboard_state = engine.get_dashboard_state(view=view)
-    _SIMULATION_DATA[client_id] = engine.to_session_dict()
+    dashboard_state["paused"] = paused
+    _SIMULATION_DATA[client_id] = {
+        **engine.to_session_dict(),
+        "paused": paused,
+    }
     return jsonify(dashboard_state)
 
 
@@ -541,12 +554,31 @@ def simulation_tick_api():
 
     payload = request.get_json(silent=True) or {}
     view = str(payload.get("view", "GERAL")).strip().upper()
-
     engine = SimulationEngine.from_session_dict(state)
-    dashboard_state = engine.tick(view=view)
-    _SIMULATION_DATA[client_id] = engine.to_session_dict()
 
+    if bool(state.get("paused", False)):
+        dashboard_state = engine.get_dashboard_state(view=view)
+        dashboard_state["paused"] = True
+        return jsonify(dashboard_state)
+
+    dashboard_state = engine.tick(view=view)
+    dashboard_state["paused"] = False
+    _SIMULATION_DATA[client_id] = {
+        **engine.to_session_dict(),
+        "paused": False,
+    }
     return jsonify(dashboard_state)
+
+
+@app.route("/api/simulation/toggle-pause", methods=["POST"])
+def toggle_pause_api():
+    client_id = _client_id()
+    state = _SIMULATION_DATA.get(client_id)
+    if not state:
+        return jsonify({"error": "Simulation not initialized."}), 400
+
+    state["paused"] = not bool(state.get("paused", False))
+    return jsonify({"paused": bool(state["paused"])})
 
 
 @app.route("/metrics")

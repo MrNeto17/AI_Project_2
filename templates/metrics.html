@@ -2,6 +2,18 @@
 {% block title %}Metrics | Production Simulator{% endblock %}
 
 {% block content %}
+<section class="card mb-3">
+    <div class="card-header fw-bold">Day Info</div>
+    <div class="card-body d-flex flex-wrap justify-content-between gap-3">
+        <div>
+            <div><strong>Date:</strong> {{ config.simulation_date }}</div>
+            <div><strong>Weekday:</strong> {{ config.week_day }}</div>
+            <div><strong>Weather:</strong> {{ config.weather }}</div>
+            <div><strong>Event:</strong> {{ config.event }}</div>
+            <div><strong>Model:</strong> {{ 'Heuristic' if config.model_choice == '1' else 'Machine Learning' }}</div>
+        </div>
+    </div>
+</section>
 <section class="card mb-4">
     <div class="card-header fw-bold">End-of-Day Metrics ({{ simulation_date }})</div>
     <div class="card-body metrics">
@@ -28,7 +40,7 @@
 {% for product in table_order %}
 <section class="card mb-3">
     <div class="card-header d-flex justify-content-between align-items-center">
-        <h6 class="mb-0 product-title">{{ product }}</h6>
+        <h6 class="mb-0 product-title">{{ product }} - Prediction Overview</h6>
         <button class="btn btn-outline-primary btn-sm" onclick="openMetricsGraph('{{ product }}')">See Graph</button>
     </div>
     <div class="card-body">

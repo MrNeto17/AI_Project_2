@@ -7,7 +7,10 @@ and OrdersInsight counter flushing. It does not calculate prediction multipliers
 from __future__ import annotations
 
 import math
+import queue
 import sqlite3
+import sys
+import threading
 import time
 from collections import defaultdict
 from dataclasses import dataclass
@@ -1308,9 +1311,49 @@ def day_simulation(
 
     urgent_spawned_orders: set[tuple[str, int, datetime]] = set()
 
+    input_q: queue.Queue[str] = queue.Queue()
+
+    def _read_stdin() -> None:
+        for line in sys.stdin:
+            stripped = line.strip()
+            if stripped:
+                input_q.put(stripped)
+
+    threading.Thread(target=_read_stdin, daemon=True).start()
+
     print(f"\nStarting real-time day simulation for {sim_date}...")
     current_minute = OPEN_MINUTES
+    paused = False
     while current_minute <= END_MINUTES:
+        try:
+            cmd = input_q.get_nowait()
+            if cmd == ":stop":
+                paused = True
+        except queue.Empty:
+            pass
+
+        if paused:
+            print(
+                "\nSimulation stopped. Do you want to resume execution (y): ",
+                end="",
+                flush=True,
+            )
+            while True:
+                try:
+                    res = input_q.get(timeout=1.0)
+                    if str(res).lower() == "y":
+                        paused = False
+                        print("\nResuming simulation...")
+                        break
+                    else:
+                        print(
+                            "Wrong input. Please enter 'y' to resume: ",
+                            end="",
+                            flush=True,
+                        )
+                except queue.Empty:
+                    continue
+
         tempo_atual = _minute_to_datetime(day_anchor, current_minute)
 
         # 1. Expiration & cleanup.
@@ -1415,7 +1458,17 @@ def day_simulation(
         )
 
         if sleep_seconds > 0:
-            time.sleep(sleep_seconds)
+            sleep_rem = sleep_seconds
+            while sleep_rem > 0 and not paused:
+                time.sleep(0.1)
+                sleep_rem -= 0.1
+                try:
+                    cmd = input_q.get_nowait()
+                    if cmd == ":stop":
+                        paused = True
+                except queue.Empty:
+                    pass
+
         current_minute += 1
 
     return ORDERS_ANSWERED

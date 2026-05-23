@@ -106,11 +106,11 @@
             <input type="hidden" name="action" value="proceed">
             <div class="col-md-4 form-check ms-2">
                 <input class="form-check-input" type="checkbox" name="use_realtime_correction" id="use_realtime_correction" {% if config.use_realtime_correction %}checked{% endif %}>
-                <label class="form-check-label" for="use_realtime_correction">Real-time correctness algorithm</label>
+                <label class="form-check-label" for="use_realtime_correction">Real-time Correctness Algorithm</label>
             </div>
             <div class="col-md-4">
                 <label class="form-label">Speed (seconds per simulated minute)</label>
-                <input type="number" min="0.1" step="0.1" class="form-control" name="sim_speed" value="{{ config.sim_speed if config.sim_speed is not none else 1.0 }}" required>
+                <input type="number" min="0.05" step="0.05" class="form-control" name="sim_speed" value="{{ config.sim_speed if config.sim_speed is not none else 0.5 }}" required>
             </div>
             <div class="col-12">
                 <button type="submit" class="btn btn-success">Proceed</button>
@@ -118,8 +118,6 @@
         </form>
     </div>
 </section>
-{% endif %}
-
 <div class="modal fade" id="graphModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-xl modal-dialog-centered">
         <div class="modal-content">
@@ -133,6 +131,12 @@
         </div>
     </div>
 </div>
+    <div class="alert alert-info mt-3 mb-0 small">
+        Enabling the Real-time Correctness Algorithm applies a dynamic temporal weight to the calculation, adjusting the output based on the daily variance defined by the ratio of predicted orders to real-time orders.
+    </div>
+{% endif %}
+
+
 {% endblock %}
 
 {% block scripts %}

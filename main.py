@@ -365,9 +365,9 @@ def main() -> None:
             enable_multiplier = use_realtime_correction in ("y", "yes")
 
             raw_seconds = input(
-                "Time of a simulated minute (default 1.0 seconds): "
+                "Time of a simulated minute (default 0.5 seconds): "
             ).strip()
-            sim_seconds = float(raw_seconds) if raw_seconds else 1.0
+            sim_seconds = float(raw_seconds) if raw_seconds else 0.5
 
             # Generate the simulated sales day before reading ItemOrders for the real-time queue.
             generate_day(
