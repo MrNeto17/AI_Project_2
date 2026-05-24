@@ -2,6 +2,7 @@ import argparse
 import math
 import sqlite3
 import sys
+import unicodedata
 from datetime import datetime, timedelta
 
 from day_sim import day_simulation, print_end_of_day_report
@@ -9,6 +10,7 @@ from heuristic import pre_calc_heuristic
 from ml import predict_ml
 from sim_data import format_item_orders_to_queue
 from simulator import generate_day
+from train import train_and_save_pipeline
 from update_db import update_day_prediction_table, update_event_weather_insight_table
 
 DEFAULT_DB_PATH = "database.db"
@@ -125,6 +127,34 @@ def prompt_multiplier() -> float:
             )
 
 
+def _normalize_input_token(value: str) -> str:
+    """Normalize user input token to an ASCII lowercase form."""
+    token = str(value or "").strip().casefold()
+    token = unicodedata.normalize("NFKD", token)
+    token = "".join(ch for ch in token if not unicodedata.combining(ch))
+    return token
+
+
+def _parse_yes_no(value: str) -> bool | None:
+    """Parse yes/no style input. Returns True, False, or None if invalid."""
+    token = _normalize_input_token(value)
+    if token in {"y", "yes", "s", "sim", "true", "1"}:
+        return True
+    if token in {"n", "no", "false", "0"}:
+        return False
+    return None
+
+
+def prompt_yes_no(question: str) -> bool:
+    """Prompt user until a valid yes/no answer is provided."""
+    while True:
+        raw = input(question).strip()
+        parsed = _parse_yes_no(raw)
+        if parsed is not None:
+            return parsed
+        print("Please answer with yes or no (e.g. y/n).")
+
+
 def collect_user_inputs() -> tuple[str, str, float]:
     """Collect weather, event, and manual multiplier, then ask for confirmation."""
     while True:
@@ -140,14 +170,10 @@ def collect_user_inputs() -> tuple[str, str, float]:
         print(f"  Event:      {event}")
         print(f"  Multiplier: {mult_manual}")
 
-        while True:
-            confirmation = input("Confirm these values? (y/n): ").strip().lower()
-            if confirmation in {"y", "yes"}:
-                return weather, event, mult_manual
-            if confirmation in {"n", "no"}:
-                print("\nLet's enter the values again.")
-                break
-            print("Please answer 'y' or 'n'.")
+        if prompt_yes_no("Confirm these values? (y/n): "):
+            return weather, event, mult_manual
+
+        print("\nLet's enter the values again.")
 
 
 def prompt_prediction_model() -> str:
@@ -306,6 +332,7 @@ def main() -> None:
             # Step 4: Run the selected pre-shift prediction model.
             print("\nCalculating pre-shift production schedule...")
             if model_choice == "1":
+                print("Using Heuristic Model (selected by user).")
                 predictions = pre_calc_heuristic(
                     db_path=db_path,
                     date=simulation_date,
@@ -323,9 +350,7 @@ def main() -> None:
                 )
 
                 if predictions is None:
-                    print(
-                        "⚠️ ML Model performance below baseline. Falling back to Heuristic Model."
-                    )
+                    print("ML model error -> falling back to Heuristic Model.")
                     predictions = pre_calc_heuristic(
                         db_path=db_path,
                         date=simulation_date,
@@ -335,6 +360,7 @@ def main() -> None:
                         mult_manual=mult_manual,
                     )
                 else:
+                    print("ML model success.")
                     predictions = apply_manual_multiplier(predictions, mult_manual)
 
             if not predictions:
@@ -347,22 +373,17 @@ def main() -> None:
             print_production_schedule(predictions)
 
             # SIMULATION SECTION
-            proceed = (
-                input("\nDo you want to proceed with the simulation (y/n): ")
-                .strip()
-                .lower()
+            proceed = prompt_yes_no(
+                "\nDo you want to proceed with the simulation (y/n): "
             )
-            if proceed not in ("y", "yes"):
+            if not proceed:
                 print("Simulation cancelled. Exiting.")
                 break
 
             # Toggle for real-time correctness algorithm.
-            use_realtime_correction = (
-                input("Do you want a real-time correctness algorithm (y/n): ")
-                .strip()
-                .lower()
+            enable_multiplier = prompt_yes_no(
+                "Do you want a real-time correctness algorithm (y/n): "
             )
-            enable_multiplier = use_realtime_correction in ("y", "yes")
 
             raw_seconds = input(
                 "Time of a simulated minute (default 0.5 seconds): "
@@ -400,10 +421,28 @@ def main() -> None:
             )
             print_end_of_day_report(db_path, simulation_date, orders_answered)
 
-            restart_choice = input("\nGo to next day (y/n): ").strip().lower()
-            if restart_choice not in ("y", "yes"):
+            try:
+                # simulation_date is DD/MM/YYYY in this project.
+                current_dt = datetime.strptime(simulation_date, "%d/%m/%Y")
+                next_day_dt = current_dt + timedelta(days=1)
+
+                # 0 corresponds to Monday
+                if next_day_dt.weekday() == 0:
+                    print(
+                        "\nUpdating Machine Learning model with the previous week data..."
+                    )
+                    train_and_save_pipeline(
+                        db_path=db_path, model_path="kitchen_model.pkl"
+                    )
+                    print("Model updated.\n")
+            except ValueError as exc:
+                print(
+                    f"Warning: could not parse simulation date '{simulation_date}': {exc}"
+                )
+
+            if not prompt_yes_no("\nGo to next day (ENTER first -> then y/n): "):
                 print("Simulation ended. Exiting.")
-                break
+                return
 
     except (RuntimeError, sqlite3.Error, ValueError) as exc:
         print(f"Fatal error: {exc}", file=sys.stderr)

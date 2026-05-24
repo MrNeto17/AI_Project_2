@@ -728,6 +728,75 @@ def _flush_window_counters(
             nr_real_orders[prod] = 0
 
 
+def _calculate_trash_by_window(
+    trash_bins: dict[str, list[list[Any]]],
+    windows_by_prod: dict[str, list[WindowInfo]],
+) -> dict[str, dict[str, int]]:
+    """Count trashed items per product/time_window using ITEM_HORA_PRONTO."""
+    counts: dict[str, dict[str, int]] = {}
+    for prod, windows in windows_by_prod.items():
+        counts[prod] = {window.time_window: 0 for window in windows}
+
+    for prod_raw, items in trash_bins.items():
+        prod = _normalize_prod(prod_raw)
+        if prod not in counts:
+            continue
+
+        prod_windows = windows_by_prod.get(prod, [])
+        for item in items:
+            if len(item) <= ITEM_HORA_PRONTO:
+                continue
+
+            hora_pronto = item[ITEM_HORA_PRONTO]
+            if not isinstance(hora_pronto, datetime):
+                continue
+
+            minute = _datetime_to_minute(hora_pronto)
+            matched_window = _window_for_minute(prod_windows, minute)
+            if matched_window is not None:
+                counts[prod][matched_window.time_window] += 1
+            elif prod_windows:
+                # Fallback for out-of-bounds ready times (e.g., cleanup past close).
+                last_window = prod_windows[-1]
+                counts[prod][last_window.time_window] += 1
+
+    return counts
+
+
+def _flush_orders_trash(
+    db_path: str,
+    sim_date: str,
+    trash_counts: dict[str, dict[str, int]],
+) -> None:
+    """Update OrdersInsight.nr_trashed at end-of-day for all product windows."""
+    try:
+        with sqlite3.connect(db_path) as conn:
+            columns = {
+                str(row[1]).strip().lower()
+                for row in conn.execute("PRAGMA table_info(OrdersInsight);").fetchall()
+            }
+            if "nr_trashed" not in columns:
+                conn.execute(
+                    "ALTER TABLE OrdersInsight ADD COLUMN nr_trashed INT DEFAULT 0;"
+                )
+
+            for prod, window_counts in trash_counts.items():
+                for time_window, count in window_counts.items():
+                    conn.execute(
+                        """
+                        UPDATE OrdersInsight
+                        SET nr_trashed = ?
+                        WHERE date = ? AND prod = ? AND time_window = ?;
+                        """,
+                        (int(count), sim_date, prod, time_window),
+                    )
+            conn.commit()
+    except sqlite3.Error as exc:
+        raise RuntimeError(
+            f"Failed to update nr_trashed in OrdersInsight: {exc}"
+        ) from exc
+
+
 def _format_for_print(value: Any) -> Any:
     """Recursively format runtime objects for consistent terminal printing."""
     if isinstance(value, datetime):
@@ -1063,6 +1132,12 @@ class SimulationEngine:
                 orders_answered=self.orders_answered,
                 trash=self.trash,
             )
+            trash_counts = _calculate_trash_by_window(self.trash, self.windows_by_prod)
+            _flush_orders_trash(
+                db_path=self.db_path,
+                sim_date=self.sim_date,
+                trash_counts=trash_counts,
+            )
             self.is_complete = True
             return self.get_dashboard_state(view=view)
 
@@ -1367,6 +1442,12 @@ def day_simulation(
                 orders_answered=ORDERS_ANSWERED,
                 trash=TRASH,
             )
+            trash_counts = _calculate_trash_by_window(TRASH, windows_by_prod)
+            _flush_orders_trash(
+                db_path=db_path,
+                sim_date=sim_date,
+                trash_counts=trash_counts,
+            )
             print_simulation_state(
                 tempo_atual=tempo_atual,
                 faturas=FATURAS,
@@ -1446,28 +1527,52 @@ def day_simulation(
             predicted_demand_map=predicted_demand_map,
         )
 
-        print_simulation_state(
-            tempo_atual=tempo_atual,
-            faturas=FATURAS,
-            orders_queues=ORDERS_QUEUE,
-            orders_answered=ORDERS_ANSWERED,
-            item_queues=ITEM_QUEUE,
-            item_preps=ITEM_PREP,
-            shelves=SHELF,
-            trash_bins=TRASH,
-        )
+        # Avoid expensive verbose printing when running the simulation at very
+        # high speed (tiny `sim_minute_seconds`). Keep end-of-day and manual
+        # inspection printing for normal-speed runs.
+        if sleep_seconds >= 0.01:
+            print_simulation_state(
+                tempo_atual=tempo_atual,
+                faturas=FATURAS,
+                orders_queues=ORDERS_QUEUE,
+                orders_answered=ORDERS_ANSWERED,
+                item_queues=ITEM_QUEUE,
+                item_preps=ITEM_PREP,
+                shelves=SHELF,
+                trash_bins=TRASH,
+            )
 
         if sleep_seconds > 0:
-            sleep_rem = sleep_seconds
-            while sleep_rem > 0 and not paused:
-                time.sleep(0.1)
-                sleep_rem -= 0.1
+            # If the requested simulated-minute duration is smaller than the
+            # loop slice we were using (0.1s), sleeping in 0.1s chunks causes
+            # an unnecessary minimum delay of 0.1s per minute. Sleep in a
+            # single small chunk when appropriate, otherwise use small
+            # repeated chunks while still allowing stdin checks.
+            if sleep_seconds < 0.1:
+                try:
+                    time.sleep(sleep_seconds)
+                except Exception:
+                    # On platforms where sleep may error on extremely small
+                    # values, fall back to no-op (fast-forward)
+                    pass
                 try:
                     cmd = input_q.get_nowait()
                     if cmd == ":stop":
                         paused = True
                 except queue.Empty:
                     pass
+            else:
+                sleep_rem = sleep_seconds
+                while sleep_rem > 0 and not paused:
+                    chunk = min(sleep_rem, 0.1)
+                    time.sleep(chunk)
+                    sleep_rem -= chunk
+                    try:
+                        cmd = input_q.get_nowait()
+                        if cmd == ":stop":
+                            paused = True
+                    except queue.Empty:
+                        pass
 
         current_minute += 1
 

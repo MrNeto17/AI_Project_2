@@ -145,7 +145,7 @@ def _build_metrics_payload(
             ).fetchone()
             details_rows = conn.execute(
                 """
-                SELECT time_window, prod, nr_predicted_orders, nr_real_orders
+                SELECT time_window, prod, nr_predicted_orders, nr_real_orders, nr_trashed
                 FROM OrdersInsight
                 WHERE date=?
                 ORDER BY prod, time_window;
@@ -192,17 +192,18 @@ def _build_metrics_payload(
     avg_waiting_time = total_waiting_time / real_orders if real_orders > 0 else 0.0
 
     totals_by_hour: dict[int, dict[str, int]] = {
-        hour: {"predicted": 0, "real": 0} for hour in range(11, 24)
+        hour: {"predicted": 0, "real": 0, "trashed": 0} for hour in range(11, 24)
     }
     per_product: dict[str, list[dict[str, Any]]] = {
         product: [] for product in PRODUCT_PRINT_ORDER
     }
 
-    for time_window, prod, nr_pred, nr_real in details_rows:
+    for time_window, prod, nr_pred, nr_real, nr_trashed in details_rows:
         time_window = str(time_window or "")
         product = str(prod or "").strip().upper()
         predicted_value = int(nr_pred or 0)
         real_value = int(nr_real or 0)
+        trashed_value = int(nr_trashed or 0)
 
         if "_" in time_window and ":" in time_window:
             try:
@@ -210,6 +211,7 @@ def _build_metrics_payload(
                 if start_hour in totals_by_hour:
                     totals_by_hour[start_hour]["predicted"] += predicted_value
                     totals_by_hour[start_hour]["real"] += real_value
+                    totals_by_hour[start_hour]["trashed"] += trashed_value
             except (TypeError, ValueError, IndexError):
                 pass
 
@@ -219,6 +221,7 @@ def _build_metrics_payload(
                     "time_window": time_window,
                     "predicted": predicted_value,
                     "real": real_value,
+                    "trashed": trashed_value,
                 }
             )
 
@@ -227,6 +230,7 @@ def _build_metrics_payload(
             "time_window": f"{hour:02d}:00_{hour:02d}:59",
             "predicted": totals_by_hour[hour]["predicted"],
             "real": totals_by_hour[hour]["real"],
+            "trashed": totals_by_hour[hour]["trashed"],
         }
         for hour in range(11, 24)
     ]
@@ -335,7 +339,7 @@ def home() -> str:
                         )
                         if predictions is None:
                             info_messages.append(
-                                "ML model did not beat baseline. Heuristic fallback was used."
+                                "ML model error. Heuristic fallback was used."
                             )
                             predictions = pre_calc_heuristic(
                                 db_path=db_path,
@@ -634,6 +638,7 @@ def metrics_graph_api(product: str):
             "time_windows": [row["time_window"] for row in rows],
             "predicted": [int(row["predicted"]) for row in rows],
             "real": [int(row["real"]) for row in rows],
+            "trashed": [int(row.get("trashed", 0)) for row in rows],
         }
     )
 

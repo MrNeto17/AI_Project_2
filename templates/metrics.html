@@ -51,6 +51,7 @@
                     <th>Time Window</th>
                     <th>Predicted Orders</th>
                     <th>Real Orders</th>
+                    <th>Trashed Items</th>
                 </tr>
                 </thead>
                 <tbody>
@@ -59,6 +60,7 @@
                     <td>{{ row.time_window }}</td>
                     <td>{{ row.predicted }}</td>
                     <td>{{ row.real }}</td>
+                    <td>{{ row.get('trashed', 0) }}</td>
                 </tr>
                 {% endfor %}
                 </tbody>
@@ -72,8 +74,8 @@
 </section>
 {% endfor %}
 
-<form method="post" action="{{ url_for('next_day') }}">
-    <button type="submit" class="btn btn-success">Next Day (Home Page)</button>
+<form method="post" action="{{ url_for('next_day') }}" class="d-grid gap-2">
+    <button type="submit" class="btn btn-success btn-lg">Next Day (Home Page)</button>
 </form>
 
 <div class="modal fade" id="metricsGraphModal" tabindex="-1" aria-hidden="true">
@@ -118,7 +120,7 @@ async function openMetricsGraph(product) {
         return;
     }
 
-    document.getElementById('metricsGraphTitle').textContent = `Predicted vs Real - ${data.product}`;
+    document.getElementById('metricsGraphTitle').textContent = `Predicted vs Real vs Trashed - ${data.product}`;
 
     const ctx = document.getElementById('metricsGraphCanvas').getContext('2d');
     if (metricsChart) {
@@ -130,8 +132,28 @@ async function openMetricsGraph(product) {
         data: {
             labels: data.time_windows,
             datasets: [
-                { label: 'Predicted', data: data.predicted, borderColor: '#0d6efd', fill: false },
-                { label: 'Real', data: data.real, borderColor: '#dc3545', fill: false }
+                {
+                    label: 'Predicted Orders',
+                    data: data.predicted,
+                    borderColor: 'rgba(54, 162, 235, 1)',
+                    backgroundColor: 'rgba(54, 162, 235, 0.2)',
+                    fill: false,
+                },
+                {
+                    label: 'Real Orders',
+                    data: data.real,
+                    borderColor: 'rgba(75, 192, 192, 1)',
+                    backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                    fill: false,
+                },
+                {
+                    label: 'Trashed Items',
+                    data: data.trashed || [],
+                    borderColor: 'rgba(255, 99, 132, 1)',
+                    backgroundColor: 'rgba(255, 99, 132, 0.2)',
+                    borderDash: [5, 5],
+                    fill: false,
+                }
             ]
         },
         options: { responsive: true, maintainAspectRatio: true }

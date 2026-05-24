@@ -141,6 +141,7 @@ CREATE TABLE IF NOT EXISTS OrdersInsight (
     prod VARCHAR(30) NOT NULL,
     nr_predicted_orders INT DEFAULT 0,
     nr_real_orders INT DEFAULT 0,
+    nr_trashed INT DEFAULT 0,
     PRIMARY KEY (date, time_window, prod)
 );
 
